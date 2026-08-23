@@ -20,7 +20,8 @@ def read_root():
 @app.post("/api/process-voice")
 async def process_voice(
     audio: UploadFile = File(...),
-    language: str = Form(...)
+    language: str = Form(...),
+    phone_number: str = Form(None)
 ):
     """
     Endpoint that the Android SDK will call.
@@ -48,7 +49,7 @@ async def process_voice(
         transcribed_text = asr_pipeline.transcribe(language, audio_data)
         
         # 4. Pass the transcribed text into our Razorpay Agent Execution Engine
-        agent_response = process_voice_command(transcribed_text)
+        agent_response = process_voice_command(transcribed_text, phone_number=phone_number)
         
         # 5. Return the unified JSON response to the Android SDK
         return {
@@ -59,6 +60,19 @@ async def process_voice(
         
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/api/webhooks/razorpay")
+async def razorpay_webhook(payload: dict):
+    """
+    Simulated Razorpay Webhook endpoint.
+    Receives async events like payment.failed, payment.captured, refund.processed.
+    """
+    event = payload.get("event", "unknown_event")
+    print(f"\n[WEBHOOK] Received async event from Razorpay: {event}")
+    print(f"[WEBHOOK] Payload: {payload}")
+    
+    # In a real app, this is where we'd push an FCM notification to the Android device
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

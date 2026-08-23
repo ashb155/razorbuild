@@ -99,7 +99,7 @@ class SarvamIntentPipeline:
         
         # Prompt with examples to guide the LLM
         prompt = f"""Extract the user intent as a JSON object. Include the following fields when applicable:
-- action (search, add, checkout, pay, remove, track, cancel, refund, create_payment_link, cancel_subscription, check_settlement, faq, create_offer, check_emi, create_invoice, payout, split_payment, create_qr, save_card, track_refund)
+- action (search, add, checkout, pay, remove, track, cancel, refund, create_payment_link, cancel_subscription, check_settlement, faq, create_offer, check_emi, create_invoice, payout, split_payment, create_qr, save_card, track_refund, handle_failed_payment, magic_checkout_address, check_offers, partial_refund)
 - item (the product or entity)
 - quantity (default 1 if not mentioned)
 - size (null if not mentioned)
@@ -113,7 +113,7 @@ class SarvamIntentPipeline:
 - split_percent (integer, for split payments)
 - card_network (string, for saving cards)
 - cross_sell (string, suggest a complimentary item to upsell the user if they are adding/searching an item)
-- requires_confirmation (boolean, true ONLY if the action involves spending/moving money like pay, cancel, refund, payout, split_payment, create_qr, create_payment_link. MUST be false for read-only actions like track, track_refund, check_settlement, search, faq, remove)
+- requires_confirmation (boolean, true ONLY if the action involves spending/moving money like pay, cancel, refund, partial_refund, payout, split_payment, create_qr, create_payment_link. MUST be false for read-only actions like track, track_refund, check_settlement, search, faq, remove, handle_failed_payment, magic_checkout_address, check_offers)
 
 Examples:
 User: "what is the status of order 123"
@@ -142,6 +142,18 @@ Result: {{ "action": "pay", "order_id": "12345", "requires_confirmation": true }
 
 User: "refund my order 12345"
 Result: {{ "action": "refund", "order_id": "12345", "requires_confirmation": true }}
+
+User: "refund 500 rupees from order 123"
+Result: {{ "action": "partial_refund", "order_id": "123", "amount": 500.0, "requires_confirmation": true }}
+
+User: "my payment failed"
+Result: {{ "action": "handle_failed_payment", "requires_confirmation": false }}
+
+User: "get my magic checkout address"
+Result: {{ "action": "magic_checkout_address", "requires_confirmation": false }}
+
+User: "what are the current offers"
+Result: {{ "action": "check_offers", "requires_confirmation": false }}
 
 User: "create a payment link for 1500.50"
 Result: {{ "action": "create_payment_link", "amount": 1500.50, "requires_confirmation": true }}
@@ -201,7 +213,7 @@ Result:"""
             intent.setdefault('requires_confirmation', False)
             
             # Enforce gating on money actions
-            if intent.get('action') in ['pay', 'refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice']:
+            if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr']:
                 intent['requires_confirmation'] = True
                 
             # For pay action, keep only order_id (remove item if present)
@@ -218,7 +230,7 @@ Result:"""
                     intent.setdefault('cross_sell', None)
                     intent.setdefault('requires_confirmation', False)
                     
-                    if intent.get('action') in ['pay', 'refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice']:
+                    if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr']:
                         intent['requires_confirmation'] = True
                         
                     if intent.get('action') == 'pay' and 'order_id' in intent:

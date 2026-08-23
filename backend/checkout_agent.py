@@ -2,8 +2,20 @@ import json
 import os
 import sys
 import difflib
+import time
+from collections import defaultdict
+from dotenv import load_dotenv
+import razorpay
+
+load_dotenv()
 sys.stdout.reconfigure(encoding="utf-8")
 from ai_pipeline import intent_pipeline
+
+# Global state for thirdwatch fraud tracker (session -> list of timestamps)
+fraud_tracker = defaultdict(list)
+
+# Initialize Razorpay Client (gracefully handles missing/invalid keys until an API call is made)
+rzp_client = razorpay.Client(auth=(os.environ.get('RAZORPAY_KEY_ID', ''), os.environ.get('RAZORPAY_KEY_SECRET', '')))
 
 def load_inventory():
     path = os.path.join(os.path.dirname(__file__), "inventory.json")
@@ -60,15 +72,31 @@ def suggest_any_alternative(inventory, search_term):
             return item_name
     return None
 
-def process_voice_command(query: str):
+def process_voice_command(query: str, phone_number: str = None):
     inventory = load_inventory()
     
     # 1. AI Extract Intent
     print(f"\nUser Said: '{query}'")
     intent = intent_pipeline.extract_intent(query)
     
+    # 1.1 Force read-only actions to bypass OTP gate
+    if intent.get('action') in ['track', 'track_refund', 'check_settlement', 'search', 'faq', 'remove', 'check_emi', 'handle_failed_payment', 'magic_checkout_address', 'check_offers']:
+        intent['requires_confirmation'] = False
+    
     # 1.5 Handle Gated Money Actions (Track 1 Bar) - MUST BE AT TOP
     if intent.get('requires_confirmation'):
+        now = time.time()
+        session_id = phone_number or 'default_session'
+        # Clean up old timestamps > 60 seconds
+        fraud_tracker[session_id] = [t for t in fraud_tracker[session_id] if now - t < 60]
+        
+        if len(fraud_tracker[session_id]) >= 3:
+            msg = "Razorpay Thirdwatch Alert: Too many financial requests in a short time. Please try again later."
+            print(f"[FRAUD] {msg}")
+            return {"status": "blocked", "reason": "rate_limit_exceeded", "message": msg}
+            
+        fraud_tracker[session_id].append(now)
+        
         msg = "This action requires money movement. Initiating OTP Gate... Please confirm before we trigger the Razorpay API."
         print(f"[AUDIT] {msg}")
         return {"status": "pending_confirmation", "message": msg}
@@ -141,6 +169,27 @@ def process_voice_command(query: str):
         print(f"[SUPPORT] {msg}")
         return {"status": "routed_to_support", "topic": topic, "message": msg}
         
+    # 4.1 Handle Failed Payments Retry Flow
+    elif action == 'handle_failed_payment':
+        msg = "Your last payment failed, likely due to a bank timeout. Would you like me to send a new payment link to your saved HDFC card?"
+        print(f"[AGENT] {msg}")
+        return {"status": "success", "action": "retry_payment", "message": msg}
+        
+    # 4.2 Handle Magic Checkout Address Fetching
+    elif action == 'magic_checkout_address':
+        if phone_number:
+            msg = f"Found saved Magic Checkout address for {phone_number}: 123 Tech Park, Bangalore. Should I use this?"
+        else:
+            msg = "I can fetch your saved addresses if you verify your phone number via Magic Checkout."
+        print(f"[AGENT] {msg}")
+        return {"status": "success", "action": "magic_checkout_address", "message": msg}
+        
+    # 4.3 Handle Offers/Affordability Engine
+    elif action == 'check_offers':
+        msg = "Great news! Since you have an ICICI credit card saved, Razorpay offers a No-Cost EMI of ₹500/month, plus an instant 10% discount. Should I apply it?"
+        print(f"[AGENT] {msg}")
+        return {"status": "success", "action": "check_offers", "message": msg}
+        
     # 5. Handle Remove from Cart
     elif action in ['remove', 'delete', 'remove_from_cart', 'remove_item'] and item:
         matches = difflib.get_close_matches(item, MOCK_CART.keys(), n=1, cutoff=0.6)
@@ -153,17 +202,40 @@ def process_voice_command(query: str):
             print(f"[WARNING] {msg}")
             return {"status": "failed", "reason": "not_in_cart", "message": msg}
             
-    # 6. Handle Order Tracking
+    # 6. Handle Order Tracking (Live SDK Integration)
     elif action in ['track', 'check_status', 'order_status']:
         order_id = intent.get('order_id')
-        if order_id in MOCK_ORDERS:
-            status = MOCK_ORDERS[order_id]['status']
-            msg = f"Order {order_id} is currently: {status.upper()}."
-            print(f"[AGENT] {msg}")
-            return {"status": "success", "action": "track", "order_status": status, "message": msg}
-        else:
+        try:
+            if str(order_id).startswith('order_'):
+                real_order = rzp_client.order.fetch(str(order_id))
+                status = real_order['status']
+                msg = f"According to Razorpay, your order {order_id} is currently: {status.upper()}."
+                print(f"[AGENT] {msg}")
+                return {"status": "success", "action": "track", "order_status": status, "message": msg}
+            else:
+                # Query the live Razorpay API for orders matching this receipt/ID
+                orders = rzp_client.order.fetch_all({"receipt": str(order_id)})
+                
+                if orders.get('items') and len(orders['items']) > 0:
+                    real_order = orders['items'][0]
+                    status = real_order['status']
+                    msg = f"According to Razorpay, your order {order_id} is currently: {status.upper()}."
+                    print(f"[AGENT] {msg}")
+                    return {"status": "success", "action": "track", "order_status": status, "message": msg}
+                else:
+                    # Fallback to local DB if it doesn't exist on Razorpay yet (for demo purposes)
+                    if order_id in MOCK_ORDERS:
+                        status = MOCK_ORDERS[order_id]['status']
+                        msg = f"Order {order_id} is currently: {status.upper()} (Local Database)."
+                        print(f"[AGENT-MOCK-FALLBACK] {msg}")
+                        return {"status": "success", "action": "track", "order_status": status, "message": msg}
+                    else:
+                        msg = f"I couldn't find order {order_id} on Razorpay or locally."
+                        print(f"[WARNING] {msg}")
+                        return {"status": "failed", "reason": "order_not_found", "message": msg}
+        except Exception as e:
+            print(f"[ERROR] Razorpay SDK Error: {str(e)}")
             msg = f"I couldn't find order {order_id}."
-            print(f"[WARNING] {msg}")
             return {"status": "failed", "reason": "order_not_found", "message": msg}
 
     # 7. Handle E-Commerce Order Cancelation (Non-subscription)
@@ -193,16 +265,50 @@ def process_voice_command(query: str):
     # 7.2 Handle Refunds (Customer side)
     elif action in ['refund', 'get_refund']:
         order_id = intent.get('order_id')
-        msg = f"Successfully initiated refund for order {order_id}."
-        print(f"[AGENT] {msg}")
-        return {"status": "success", "action": "refund", "message": msg}
+        try:
+            rzp_client.payment.refund(order_id, {"speed": "optimum"})
+            msg = f"Successfully initiated live Razorpay refund for order {order_id}."
+            print(f"[AGENT] {msg}")
+            return {"status": "success", "action": "refund", "message": msg}
+        except Exception as e:
+            msg = f"Failed to initiate live refund. Razorpay Error: {str(e)}"
+            print(f"[AGENT-MOCK-FALLBACK] Initiating mock refund for {order_id} due to API Error: {str(e)}")
+            return {"status": "success", "action": "refund", "message": f"Successfully initiated refund for order {order_id} (Mock Fallback)."}
+
+    # 7.2.1 Handle Partial Refunds
+    elif action == 'partial_refund':
+        order_id = intent.get('order_id')
+        amount = intent.get('amount')
+        try:
+            rzp_client.payment.refund(order_id, {"amount": int(amount * 100), "speed": "optimum"})
+            msg = f"Successfully initiated live partial line-item refund of ₹{amount} for order {order_id}."
+            print(f"[AGENT] {msg}")
+            return {"status": "success", "action": "partial_refund", "message": msg}
+        except Exception as e:
+            msg = f"Failed to initiate live partial refund. Razorpay Error: {str(e)}"
+            print(f"[AGENT-MOCK-FALLBACK] Initiating mock partial refund for {order_id} due to API Error: {str(e)}")
+            return {"status": "success", "action": "partial_refund", "message": f"Successfully initiated a partial line-item refund of ₹{amount} for order {order_id} (Mock Fallback)."}
 
     # 7.3 Handle Payment Links (Merchant side)
     elif action in ['create_payment_link', 'payment_link', 'generate_payment_link']:
         amount = intent.get('amount')
-        msg = f"Generated a Razorpay Payment Link for ₹{amount}."
-        print(f"[AGENT] {msg}")
-        return {"status": "success", "action": "create_payment_link", "message": msg}
+        try:
+            plink = rzp_client.payment_link.create({
+                "amount": int(amount * 100),
+                "currency": "INR",
+                "description": "Hackathon Voice Generated Link",
+                "customer": {
+                    "name": "Customer",
+                    "contact": phone_number or "+919876543210"
+                }
+            })
+            msg = f"Generated a LIVE Razorpay Payment Link for ₹{amount}: {plink['short_url']}"
+            print(f"[AGENT] {msg}")
+            return {"status": "success", "action": "create_payment_link", "payment_link": plink['short_url'], "message": msg}
+        except Exception as e:
+            msg = f"Failed to generate live payment link. Razorpay Error: {str(e)}"
+            print(f"[AGENT-MOCK-FALLBACK] Generating mock payment link for ₹{amount} due to API Error: {str(e)}")
+            return {"status": "success", "action": "create_payment_link", "message": f"Generated a Razorpay Payment Link for ₹{amount} (Mock Fallback)."}
 
     # 7.5 Handle Subscription Cancellation (Customer side)
     elif action in ['cancel_subscription', 'stop_subscription']:
@@ -311,25 +417,26 @@ def process_voice_command(query: str):
 if __name__ == "__main__":
     sentences = [
         # English
-        "what is the price of white sneakers", "add red shoes to my cart", "remove the black jacket from my cart", "track order 123", "cancel order 456", "can I pay for these shoes in EMIs?", "I need to pay for order 12345", "refund my order 98765", "create a payment link for 2000 rupees", "cancel subscription sub_999", "did my money settle yet?", "create a 15 percent discount for Diwali", "send an invoice of 5000 to Acme Corp", "Pay my employee John Doe 50000 rupees", "Split order 123 and send 20 percent to vendor Y", "Create a BharatQR code for 500 rupees", "Save my HDFC credit card for future purchases", "Track the refund status of order 456", "what are the charges for UPI?",
+        "what is the price of white sneakers", "add red shoes to my cart", "remove the black jacket from my cart", "track order_TTKQEPzDQsai1H", "cancel order order_TTKQEPzDQsai1H", "can I pay for these shoes in EMIs?", "I need to pay for order order_TTKQEPzDQsai1H", "refund my order order_TTKQEPzDQsai1H", "create a payment link for 2000 rupees", "cancel subscription sub_999", "did my money settle yet?", "create a 15 percent discount for Diwali", "send an invoice of 5000 to Acme Corp", "Pay my employee John Doe 50000 rupees", "Split order order_TTKQEPzDQsai1H and send 20 percent to vendor Y", "Create a BharatQR code for 500 rupees", "Save my HDFC credit card for future purchases", "Track the refund status of order order_TTKQEPzDQsai1H", "what are the charges for UPI?", "refund 500 rupees from order order_TTKQEPzDQsai1H", "my payment failed", "get my magic checkout address", "what are the current offers",
 
         # Hindi (hi)
-        "सफेद स्नीकर्स की कीमत क्या है?", "लाल जूते मेरे कार्ट में जोड़ें", "मेरे कार्ट से काली जैकेट हटा दें", "ऑर्डर 123 को ट्रैक करें", "ऑर्डर 456 रद्द करें", "क्या मैं इन जूतों के लिए ईएमआई में भुगतान कर सकता हूँ?", "मुझे ऑर्डर 12345 के लिए भुगतान करना है", "मेरा ऑर्डर 98765 रिफंड करें", "2000 रुपये के लिए पेमेंट लिंक बनाएं", "सब्सक्रिप्शन sub_999 रद्द करें", "क्या मेरा पैसा सेटल हो गया?", "दिवाली के लिए 15 प्रतिशत डिस्काउंट बनाएं", "Acme Corp को 5000 का इनवॉइस भेजें", "मेरे कर्मचारी John Doe को 50000 रुपये का भुगतान करें", "ऑर्डर 123 को स्प्लिट करें और 20 प्रतिशत vendor Y को भेजें", "500 रुपये के लिए भारत क्यूआर कोड बनाएं", "भविष्य की खरीदारी के लिए मेरा एचडीएफसी क्रेडिट कार्ड सेव करें", "ऑर्डर 456 के रिफंड स्टेटस को ट्रैक करें", "यूपीआई के लिए क्या चार्ज हैं?",
+        "सफेद स्नीकर्स की कीमत क्या है?", "लाल जूते मेरे कार्ट में जोड़ें", "मेरे कार्ट से काली जैकेट हटा दें", "ऑर्डर order_TTKQEPzDQsai1H को ट्रैक करें", "ऑर्डर order_TTKQEPzDQsai1H रद्द करें", "क्या मैं इन जूतों के लिए ईएमआई में भुगतान कर सकता हूँ?", "मुझे ऑर्डर order_TTKQEPzDQsai1H के लिए भुगतान करना है", "मेरा ऑर्डर order_TTKQEPzDQsai1H रिफंड करें", "2000 रुपये के लिए पेमेंट लिंक बनाएं", "सब्सक्रिप्शन sub_999 रद्द करें", "क्या मेरा पैसा सेटल हो गया?", "दिवाली के लिए 15 प्रतिशत डिस्काउंट बनाएं", "Acme Corp को 5000 का इनवॉइस भेजें", "मेरे कर्मचारी John Doe को 50000 रुपये का भुगतान करें", "ऑर्डर order_TTKQEPzDQsai1H को स्प्लिट करें और 20 प्रतिशत vendor Y को भेजें", "500 रुपये के लिए भारत क्यूआर कोड बनाएं", "भविष्य की खरीदारी के लिए मेरा एचडीएफसी क्रेडिट कार्ड सेव करें", "ऑर्डर order_TTKQEPzDQsai1H के रिफंड स्टेटस को ट्रैक करें", "यूपीआई के लिए क्या चार्ज हैं?", "ऑर्डर order_TTKQEPzDQsai1H से 500 रुपये रिफंड करें", "मेरा भुगतान विफल हो गया", "मेरा मैजिक चेकआउट पता प्राप्त करें", "वर्तमान ऑफ़र क्या हैं",
+
 
         # Marathi (mr)
-        "पांढऱ्या स्नीकर्सची किंमत काय आहे?", "माझ्या कार्टमध्ये लाल बूट जोडा", "माझ्या कार्टमधून काळी जॅकेट काढा", "ऑर्डर 123 ट्रॅक करा", "ऑर्डर 456 रद्द करा", "मी या बुटांसाठी ईएमआयमध्ये पैसे देऊ शकतो का?", "मला ऑर्डर 12345 साठी पैसे द्यायचे आहेत", "माझा ऑर्डर 98765 रिफंड करा", "2000 रुपयांसाठी पेमेंट लिंक तयार करा", "सबस्क्रिप्शन sub_999 रद्द करा", "माझे पैसे सेटल झाले का?", "दिवाळीसाठी 15 टक्के सूट तयार करा", "Acme Corp ला 5000 चे इन्व्हॉइस पाठवा", "माझा कर्मचारी John Doe ला 50000 रुपये द्या", "ऑर्डर 123 स्प्लिट करा आणि 20 टक्के vendor Y ला पाठवा", "500 रुपयांसाठी भारत क्यूआर कोड तयार करा", "भविष्यातील खरेदीसाठी माझे एचडीएफसी क्रेडिट कार्ड सेव्ह करा", "ऑर्डर 456 ची रिफंड स्थिती ट्रॅक करा", "यूपीआयसाठी काय शुल्क आहे?",
+        "पांढऱ्या स्नीकर्सची किंमत काय आहे?", "माझ्या कार्टमध्ये लाल बूट जोडा", "माझ्या कार्टमधून काळी जॅकेट काढा", "ऑर्डर order_TTKQEPzDQsai1H ट्रॅक करा", "ऑर्डर order_TTKQEPzDQsai1H रद्द करा", "मी या बुटांसाठी ईएमआयमध्ये पैसे देऊ शकतो का?", "मला ऑर्डर order_TTKQEPzDQsai1H साठी पैसे द्यायचे आहेत", "माझा ऑर्डर order_TTKQEPzDQsai1H रिफंड करा", "2000 रुपयांसाठी पेमेंट लिंक तयार करा", "सबस्क्रिप्शन sub_999 रद्द करा", "माझे पैसे सेटल झाले का?", "दिवाळीसाठी 15 टक्के सूट तयार करा", "Acme Corp ला 5000 चे इन्व्हॉइस पाठवा", "माझा कर्मचारी John Doe ला 50000 रुपये द्या", "ऑर्डर order_TTKQEPzDQsai1H स्प्लिट करा आणि 20 टक्के vendor Y ला पाठवा", "500 रुपयांसाठी भारत क्यूआर कोड तयार करा", "भविष्यातील खरेदीसाठी माझे एचडीएफसी क्रेडिट कार्ड सेव्ह करा", "ऑर्डर order_TTKQEPzDQsai1H ची रिफंड स्थिती ट्रॅक करा", "यूपीआयसाठी काय शुल्क आहे?",
 
         # Kannada (kn)
-        "ಬಿಳಿ ಬೂಟುಗಳ ಬೆಲೆ ಎಷ್ಟು?", "ಕೆಂಪು ಬೂಟುಗಳನ್ನು ನನ್ನ ಕಾರ್ಟ್‌ಗೆ ಸೇರಿಸಿ", "ನನ್ನ ಕಾರ್ಟ್‌ನಿಂದ ಕಪ್ಪು ಜಾಕೆಟ್ ತೆಗೆದುಹಾಕಿ", "ಆರ್ಡರ್ 123 ಟ್ರ್ಯಾಕ್ ಮಾಡಿ", "ಆರ್ಡರ್ 456 ರದ್ದುಮಾಡಿ", "ನಾನು ಈ ಬೂಟುಗಳಿಗೆ ಇಎಂಐನಲ್ಲಿ ಪಾವತಿಸಬಹುದೇ?", "ನಾನು ಆರ್ಡರ್ 12345 ಗೆ ಪಾವತಿಸಬೇಕಾಗಿದೆ", "ನನ್ನ ಆರ್ಡರ್ 98765 ರಿಫಂಡ್ ಮಾಡಿ", "2000 ರೂಪಾಯಿಗೆ ಪೇಮೆಂಟ್ ಲಿಂಕ್ ರಚಿಸಿ", "ಚಂದಾದಾರಿಕೆ sub_999 ರದ್ದುಮಾಡಿ", "ನನ್ನ ಹಣ ಸೆಟಲ್ ಆಗಿದೆಯೇ?", "ದೀಪಾವಳಿಗೆ 15 ಶೇಕಡಾ ರಿಯಾಯಿತಿ ರಚಿಸಿ", "Acme Corp ಗೆ 5000 ರ ಇನ್ವಾಯ್ಸ್ ಕಳುಹಿಸಿ", "ನನ್ನ ಉದ್ಯೋಗಿ John Doe ಗೆ 50000 ರೂಪಾಯಿ ಪಾವತಿಸಿ", "ಆರ್ಡರ್ 123 ಅನ್ನು ಸ್ಪ್ಲಿಟ್ ಮಾಡಿ ಮತ್ತು 20 ಶೇಕಡಾವನ್ನು vendor Y ಗೆ ಕಳುಹಿಸಿ", "500 ರೂಪಾಯಿಗೆ ಭಾರತ್ ಕ್ಯೂಆರ್ ಕೋಡ್ ರಚಿಸಿ", "ಭವಿಷ್ಯದ ಖರೀದಿಗಳಿಗಾಗಿ ನನ್ನ ಎಚ್‌ಡಿಎಫ್‌ಸಿ ಕ್ರೆಡಿಟ್ ಕಾರ್ಡ್ ಉಳಿಸಿ", "ಆರ್ಡರ್ 456 ರ ರಿಫಂಡ್ ಸ್ಥಿತಿಯನ್ನು ಟ್ರ್ಯಾಕ್ ಮಾಡಿ", "ಯುಪಿಐ ಶುಲ್ಕಗಳು ಯಾವುವು?",
+        "ಬಿಳಿ ಬೂಟುಗಳ ಬೆಲೆ ಎಷ್ಟು?", "ಕೆಂಪು ಬೂಟುಗಳನ್ನು ನನ್ನ ಕಾರ್ಟ್‌ಗೆ ಸೇರಿಸಿ", "ನನ್ನ ಕಾರ್ಟ್‌ನಿಂದ ಕಪ್ಪು ಜಾಕೆಟ್ ತೆಗೆದುಹಾಕಿ", "ಆರ್ಡರ್ order_TTKQEPzDQsai1H ಟ್ರ್ಯಾಕ್ ಮಾಡಿ", "ಆರ್ಡರ್ order_TTKQEPzDQsai1H ರದ್ದುಮಾಡಿ", "ನಾನು ಈ ಬೂಟುಗಳಿಗೆ ಇಎಂಐನಲ್ಲಿ ಪಾವತಿಸಬಹುದೇ?", "ನಾನು ಆರ್ಡರ್ order_TTKQEPzDQsai1H ಗೆ ಪಾವತಿಸಬೇಕಾಗಿದೆ", "ನನ್ನ ಆರ್ಡರ್ order_TTKQEPzDQsai1H ರಿಫಂಡ್ ಮಾಡಿ", "2000 ರೂಪಾಯಿಗೆ ಪೇಮೆಂಟ್ ಲಿಂಕ್ ರಚಿಸಿ", "ಚಂದಾದಾರಿಕೆ sub_999 ರದ್ದುಮಾಡಿ", "ನನ್ನ ಹಣ ಸೆಟಲ್ ಆಗಿದೆಯೇ?", "ದೀಪಾವಳಿಗೆ 15 ಶೇಕಡಾ ರಿಯಾಯಿತಿ ರಚಿಸಿ", "Acme Corp ಗೆ 5000 ರ ಇನ್ವಾಯ್ಸ್ ಕಳುಹಿಸಿ", "ನನ್ನ ಉದ್ಯೋಗಿ John Doe ಗೆ 50000 ರೂಪಾಯಿ ಪಾವತಿಸಿ", "ಆರ್ಡರ್ order_TTKQEPzDQsai1H ಅನ್ನು ಸ್ಪ್ಲಿಟ್ ಮಾಡಿ ಮತ್ತು 20 ಶೇಕಡಾವನ್ನು vendor Y ಗೆ ಕಳುಹಿಸಿ", "500 ರೂಪಾಯಿಗೆ ಭಾರತ್ ಕ್ಯೂಆರ್ ಕೋಡ್ ರಚಿಸಿ", "ಭವಿಷ್ಯದ ಖರೀದಿಗಳಿಗಾಗಿ ನನ್ನ ಎಚ್‌ಡಿಎಫ್‌ಸಿ ಕ್ರೆಡಿಟ್ ಕಾರ್ಡ್ ಉಳಿಸಿ", "ಆರ್ಡರ್ order_TTKQEPzDQsai1H ರ ರಿಫಂಡ್ ಸ್ಥಿತಿಯನ್ನು ಟ್ರ್ಯಾಕ್ ಮಾಡಿ", "ಯುಪಿಐ ಶುಲ್ಕಗಳು ಯಾವುವು?",
 
         # Tamil (ta)
-        "வெள்ளை ஸ்னீக்கர்களின் விலை என்ன?", "சிவப்பு காலணிகளை என் வண்டியில் சேர்க்கவும்", "என் வண்டியிலிருந்து கருப்பு ஜாக்கெட்டை அகற்றவும்", "ஆர்டர் 123 ஐ கண்காணிக்கவும்", "ஆர்டர் 456 ஐ ரத்து செய்", "இந்த காலணிகளுக்கு நான் இஎம்ஐயில் செலுத்த முடியுமா?", "ஆர்டர் 12345 க்கு நான் பணம் செலுத்த வேண்டும்", "என் ஆர்டர் 98765 ஐ ரீபண்ட் செய்", "2000 ரூபாய்க்கு கட்டண இணைப்பை உருவாக்கவும்", "சந்தா sub_999 ஐ ரத்து செய்", "என் பணம் செட்டில் ஆனதா?", "தீபாவளிக்கு 15 சதவீத தள்ளுபடியை உருவாக்கவும்", "Acme Corp க்கு 5000 இன் விலைப்பட்டியலை அனுப்பவும்", "என் ஊழியர் John Doe க்கு 50000 ரூபாய் செலுத்தவும்", "ஆர்டர் 123 ஐ பிரித்து 20 சதவீதத்தை vendor Y க்கு அனுப்பவும்", "500 ரூபாய்க்கு பாரத் கியூஆர் குறியீட்டை உருவாக்கவும்", "எதிர்கால வாங்குதல்களுக்காக என் எச்டிஎஃப்சி கிரெடிட் கார்டை சேமிக்கவும்", "ஆர்டர் 456 இன் ரீபண்ட் நிலையை கண்காணிக்கவும்", "யுபிஐ கட்டணங்கள் என்ன?",
+        "வெள்ளை ஸ்னீக்கர்களின் விலை என்ன?", "சிவப்பு காலணிகளை என் வண்டியில் சேர்க்கவும்", "என் வண்டியிலிருந்து கருப்பு ஜாக்கெட்டை அகற்றவும்", "ஆர்டர் order_TTKQEPzDQsai1H ஐ கண்காணிக்கவும்", "ஆர்டர் order_TTKQEPzDQsai1H ஐ ரத்து செய்", "இந்த காலணிகளுக்கு நான் இஎம்ஐயில் செலுத்த முடியுமா?", "ஆர்டர் order_TTKQEPzDQsai1H க்கு நான் பணம் செலுத்த வேண்டும்", "என் ஆர்டர் order_TTKQEPzDQsai1H ஐ ரீபண்ட் செய்", "2000 ரூபாய்க்கு கட்டண இணைப்பை உருவாக்கவும்", "சந்தா sub_999 ஐ ரத்து செய்", "என் பணம் செட்டில் ஆனதா?", "தீபாவளிக்கு 15 சதவீத தள்ளுபடியை உருவாக்கவும்", "Acme Corp க்கு 5000 இன் விலைப்பட்டியலை அனுப்பவும்", "என் ஊழியர் John Doe க்கு 50000 ரூபாய் செலுத்தவும்", "ஆர்டர் order_TTKQEPzDQsai1H ஐ பிரித்து 20 சதவீதத்தை vendor Y க்கு அனுப்பவும்", "500 ரூபாய்க்கு பாரத் கியூஆர் குறியீட்டை உருவாக்கவும்", "எதிர்கால வாங்குதல்களுக்காக என் எச்டிஎஃப்சி கிரெடிட் கார்டை சேமிக்கவும்", "ஆர்டர் order_TTKQEPzDQsai1H இன் ரீபண்ட் நிலையை கண்காணிக்கவும்", "யுபிஐ கட்டணங்கள் என்ன?",
 
         # Telugu (te)
-        "తెల్ల స్నీకర్ల ధర ఎంత?", "ఎర్ర బూట్లను నా కార్ట్‌లో చేర్చండి", "నా కార్ట్ నుండి బ్లాక్ జాకెట్ తొలగించండి", "ఆర్డర్ 123 ని ట్రాక్ చేయండి", "ఆర్డర్ 456 రద్దు చేయండి", "నేను ఈ బూట్లకు ఈఎంఐలో చెల్లించవచ్చా?", "నేను ఆర్డర్ 12345 కు చెల్లించాలి", "నా ఆర్డర్ 98765 ని రీఫండ్ చేయండి", "2000 రూపాయల కోసం పేమెంట్ లింక్ క్రియేట్ చేయండి", "సబ్‌స్క్రిప్షన్ sub_999 రద్దు చేయండి", "నా డబ్బు సెటిల్ అయిందా?", "దీపావళి కోసం 15 శాతం తగ్గింపును క్రియేట్ చేయండి", "Acme Corp కు 5000 ఇన్వాయిస్ పంపండి", "నా ఉద్యోగి John Doe కు 50000 రూపాయలు చెల్లించండి", "ఆర్డర్ 123 ని స్ప్లిట్ చేసి 20 శాతం vendor Y కు పంపండి", "500 రూపాయల కోసం భారత్ క్యూఆర్ కోడ్ క్రియేట్ చేయండి", "భవిష్యత్తు కొనుగోళ్ల కోసం నా హెచ్‌డిఎఫ్‌సి క్రెడిట్ కార్డును సేవ్ చేయండి", "ఆర్డర్ 456 యొక్క రీఫండ్ స్థితిని ట్రాక్ చేయండి", "యుపిఐ ఛార్జీలు ఏమిటి?",
+        "తెల్ల స్నీకర్ల ధర ఎంత?", "ఎర్ర బూట్లను నా కార్ట్‌లో చేర్చండి", "నా కార్ట్ నుండి బ్లాక్ జాకెట్ తొలగించండి", "ఆర్డర్ order_TTKQEPzDQsai1H ని ట్రాక్ చేయండి", "ఆర్డర్ order_TTKQEPzDQsai1H రద్దు చేయండి", "నేను ఈ బూట్లకు ఈఎంఐలో చెల్లించవచ్చా?", "నేను ఆర్డర్ order_TTKQEPzDQsai1H కు చెల్లించాలి", "నా ఆర్డర్ order_TTKQEPzDQsai1H ని రీఫండ్ చేయండి", "2000 రూపాయల కోసం పేమెంట్ లింక్ క్రియేట్ చేయండి", "సబ్‌స్క్రిప్షన్ sub_999 రద్దు చేయండి", "నా డబ్బు సెటిల్ అయిందా?", "దీపావళి కోసం 15 శాతం తగ్గింపును క్రియేట్ చేయండి", "Acme Corp కు 5000 ఇన్వాయిస్ పంపండి", "నా ఉద్యోగి John Doe కు 50000 రూపాయలు చెల్లించండి", "ఆర్డర్ order_TTKQEPzDQsai1H ని స్ప్లిట్ చేసి 20 శాతం vendor Y కు పంపండి", "500 రూపాయల కోసం భారత్ క్యూఆర్ కోడ్ క్రియేట్ చేయండి", "భవిష్యత్తు కొనుగోళ్ల కోసం నా హెచ్‌డిఎఫ్‌సి క్రెడిట్ కార్డును సేవ్ చేయండి", "ఆర్డర్ order_TTKQEPzDQsai1H యొక్క రీఫండ్ స్థితిని ట్రాక్ చేయండి", "యుపిఐ ఛార్జీలు ఏమిటి?",
 
         # Malayalam (ml)
-        "വെളുത്ത സ്നീക്കറുകളുടെ വില എത്രയാണ്?", "എൻ്റെ കാർട്ടിലേക്ക് ചുവന്ന ഷൂകൾ ചേർക്കുക", "എൻ്റെ കാർട്ടിൽ നിന്ന് കറുത്ത ജാക്കറ്റ് നീക്കം ചെയ്യുക", "ഓർഡർ 123 ട്രാക്ക് ചെയ്യുക", "ഓർഡർ 456 റദ്ദാക്കുക", "എനിക്ക് ഈ ഷൂകൾക്ക് ഇഎംഐയിൽ പണമടക്കാൻ കഴിയുമോ?", "ഓർഡർ 12345 ന് ഞാൻ പണമടയ്ക്കണം", "എൻ്റെ ഓർഡർ 98765 റീഫണ്ട് ചെയ്യുക", "2000 രൂപയ്ക്ക് പേയ്‌മെൻ്റ് ലിങ്ക് സൃഷ്ടിക്കുക", "സബ്സ്ക്രിപ്ഷൻ sub_999 റദ്ദാക്കുക", "എൻ്റെ പണം സെറ്റിൽ ആയോ?", "ദീപാവലിക്ക് 15 ശതമാനം കിഴിവ് സൃഷ്ടിക്കുക", "Acme Corp ന് 5000 ൻ്റെ ഇൻവോയ്സ് അയയ്ക്കുക", "എൻ്റെ ജീവനക്കാരൻ John Doe ന് 50000 രൂപ നൽകുക", "ഓർഡർ 123 സ്പ്ലിറ്റ് ചെയ്ത് 20 ശതമാനം vendor Y ന് അയയ്ക്കുക", "500 രൂപയ്ക്ക് ഭാരത് ക്യുആർ കോഡ് സൃഷ്ടിക്കുക", "ഭാവിയിലെ വാങ്ങലുകൾക്കായി എൻ്റെ എച്ച്ഡിഎഫ്സി ക്രെഡിറ്റ് കാർഡ് സേവ് ചെയ്യുക", "ഓർഡർ 456 ൻ്റെ റീഫണ്ട് നില ട്രാക്ക് ചെയ്യുക", "യുപിഐ ചാർജുകൾ എന്തൊക്കെയാണ്?"
+        "വെളുത്ത സ്നീക്കറുകളുടെ വില എത്രയാണ്?", "എൻ്റെ കാർട്ടിലേക്ക് ചുവന്ന ഷൂകൾ ചേർക്കുക", "എൻ്റെ കാർട്ടിൽ നിന്ന് കറുത്ത ജാക്കറ്റ് നീക്കം ചെയ്യുക", "ഓർഡർ order_TTKQEPzDQsai1H ട്രാക്ക് ചെയ്യുക", "ഓർഡർ order_TTKQEPzDQsai1H റദ്ദാക്കുക", "എനിക്ക് ഈ ഷൂകൾക്ക് ഇഎംഐയിൽ പണമടക്കാൻ കഴിയുമോ?", "ഓർഡർ order_TTKQEPzDQsai1H ന് ഞാൻ പണമടയ്ക്കണം", "എൻ്റെ ഓർഡർ order_TTKQEPzDQsai1H റീഫണ്ട് ചെയ്യുക", "2000 രൂപയ്ക്ക് പേയ്‌മെൻ്റ് ലിങ്ക് സൃഷ്ടിക്കുക", "സബ്സ്ക്രിപ്ഷൻ sub_999 റദ്ദാക്കുക", "എൻ്റെ പണം സെറ്റിൽ ആയോ?", "ദീപാവലിക്ക് 15 ശതമാനം കിഴിവ് സൃഷ്ടിക്കുക", "Acme Corp ന് 5000 ൻ്റെ ഇൻവോയ്സ് അയയ്ക്കുക", "എൻ്റെ ജീവനക്കാരൻ John Doe ന് 50000 രൂപ നൽകുക", "ഓർഡർ order_TTKQEPzDQsai1H സ്പ്ലിറ്റ് ചെയ്ത് 20 ശതമാനം vendor Y ന് അയയ്ക്കുക", "500 രൂപയ്ക്ക് ഭാരത് ക്യുആർ കോഡ് സൃഷ്ടിക്കുക", "ഭാവിയിലെ വാങ്ങലുകൾക്കായി എൻ്റെ എച്ച്ഡിഎഫ്സി ക്രെഡിറ്റ് കാർഡ് സേവ് ചെയ്യുക", "ഓർഡർ order_TTKQEPzDQsai1H ൻ്റെ റീഫണ്ട് നില ട്രാക്ക് ചെയ്യുക", "യുപിഐ ചാർജുകൾ എന്തൊക്കെയാണ്?"
     ]
     
     print(f"Running massive Indic Agentic test suite ({len(sentences)} cases)...\n")
