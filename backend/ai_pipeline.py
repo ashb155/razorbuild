@@ -122,6 +122,12 @@ User: "did my money settle yet?"
 Result: {{ "action": "check_settlement", "requires_confirmation": false }}
 User: "remove the black jacket from my cart"
 Result: {{ "action": "remove", "item": "black jacket", "requires_confirmation": false }}
+
+User: "add a black jacket to my cart"
+Result: {{ "action": "add", "item": "black jacket" }}
+
+User: "I want to checkout the black jacket"
+Result: {{ "action": "checkout", "item": "black jacket", "requires_confirmation": true }}
 User: "create a 15 percent discount for Diwali"
 Result: {{ "action": "create_offer", "discount_percent": 15, "requires_confirmation": true }}
 
@@ -185,6 +191,9 @@ Result: {{ "action": "save_card", "card_network": "HDFC" }}
 User: "Track the refund status of order 456"
 Result: {{ "action": "track_refund", "order_id": "456" }}
 
+User: "Track the refund status of pay_1234567890"
+Result: {{ "action": "track_refund", "order_id": "pay_1234567890" }}
+
 User: "{text}"
 Result:"""
         print(f"Extracting intent for text: '{text}'...")
@@ -213,7 +222,7 @@ Result:"""
             intent.setdefault('requires_confirmation', False)
             
             # Enforce gating on money actions
-            if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr']:
+            if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr', 'checkout']:
                 intent['requires_confirmation'] = True
                 
             # For pay action, keep only order_id (remove item if present)
@@ -230,7 +239,7 @@ Result:"""
                     intent.setdefault('cross_sell', None)
                     intent.setdefault('requires_confirmation', False)
                     
-                    if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr']:
+                    if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr', 'checkout']:
                         intent['requires_confirmation'] = True
                         
                     if intent.get('action') == 'pay' and 'order_id' in intent:

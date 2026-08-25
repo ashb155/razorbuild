@@ -129,6 +129,7 @@ def process_voice_command(query: str, phone_number: str = None):
         if matches:
             item = matches[0]
             stock = inventory[item]['stock']
+            price = inventory[item]['price']
             
             # --- THE GRACEFUL FAILURE (OUT OF STOCK) ---
             if stock == 0:
@@ -145,13 +146,37 @@ def process_voice_command(query: str, phone_number: str = None):
                 print(f"[AGENT] {msg}")
                 return {"status": "pending_quantity_confirmation", "available": stock, "message": msg}
                 
-            # --- THE HAPPY PATH + UPSELL ---
-            msg = f"Successfully added {requested_qty} {item}(s) to your cart."
-            if intent.get('cross_sell'):
-                msg += f" Would you also like to add {intent['cross_sell']} to your order?"
-            print(f"[AGENT] {msg}")
-                
-            return {"status": "success", "action": "added", "message": msg}
+            # --- THE HAPPY PATH + UPSELL / PAYMENT LINK ---
+            if action in ['checkout', 'buy', 'purchase']:
+                try:
+                    total_price = int(price * requested_qty * 100)
+                    payment_link_data = {
+                        "amount": total_price,
+                        "currency": "INR",
+                        "description": f"Payment for {requested_qty} x {item}",
+                        "customer": {
+                            "name": "Voice Assistant Customer",
+                            "contact": phone_number or "+919999999999",
+                            "email": "customer@example.com"
+                        },
+                        "notify": {"sms": False, "email": False}
+                    }
+                    plink = rzp_client.payment_link.create(payment_link_data)
+                    link = plink.get('short_url')
+                    msg = f"I've prepared your order for {requested_qty} {item}(s). The total is ₹{price * requested_qty}. Please complete your payment here: {link}"
+                    print(f"[AGENT] {msg}")
+                    return {"status": "success", "action": "checkout_with_link", "payment_link": link, "message": msg}
+                except Exception as e:
+                    print(f"[ERROR] Payment Link Gen Error: {e}")
+                    msg = f"Successfully added {requested_qty} {item}(s) to your cart. (Failed to generate payment link)"
+                    print(f"[AGENT] {msg}")
+                    return {"status": "success", "action": "added", "message": msg}
+            else:
+                msg = f"Successfully added {requested_qty} {item}(s) to your cart."
+                if intent.get('cross_sell'):
+                    msg += f" Would you also like to add {intent['cross_sell']} to your order?"
+                print(f"[AGENT] {msg}")
+                return {"status": "success", "action": "added", "message": msg}
             
         else:
             alt = suggest_any_alternative(inventory, item)
@@ -266,28 +291,50 @@ def process_voice_command(query: str, phone_number: str = None):
     elif action in ['refund', 'get_refund']:
         order_id = intent.get('order_id')
         try:
-            rzp_client.payment.refund(order_id, {"speed": "optimum"})
-            msg = f"Successfully initiated live Razorpay refund for order {order_id}."
+            if str(order_id).startswith('pay_'):
+                payment_id = order_id
+            else:
+                payments = rzp_client.order.payments(order_id)
+                if payments.get('items') and len(payments['items']) > 0:
+                    payment_id = payments['items'][0]['id']
+                else:
+                    msg = f"No payments found for order {order_id} to refund."
+                    print(f"[WARNING] {msg}")
+                    return {"status": "failed", "reason": "payment_not_found", "message": msg}
+            
+            rzp_client.payment.refund(payment_id, {"speed": "optimum"})
+            msg = f"Successfully initiated live Razorpay refund for {order_id}."
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "refund", "message": msg}
         except Exception as e:
             msg = f"Failed to initiate live refund. Razorpay Error: {str(e)}"
             print(f"[AGENT-MOCK-FALLBACK] Initiating mock refund for {order_id} due to API Error: {str(e)}")
-            return {"status": "success", "action": "refund", "message": f"Successfully initiated refund for order {order_id} (Mock Fallback)."}
+            return {"status": "success", "action": "refund", "message": f"Successfully initiated refund for {order_id} (Mock Fallback)."}
 
     # 7.2.1 Handle Partial Refunds
     elif action == 'partial_refund':
         order_id = intent.get('order_id')
         amount = intent.get('amount')
         try:
-            rzp_client.payment.refund(order_id, {"amount": int(amount * 100), "speed": "optimum"})
-            msg = f"Successfully initiated live partial line-item refund of ₹{amount} for order {order_id}."
+            if str(order_id).startswith('pay_'):
+                payment_id = order_id
+            else:
+                payments = rzp_client.order.payments(order_id)
+                if payments.get('items') and len(payments['items']) > 0:
+                    payment_id = payments['items'][0]['id']
+                else:
+                    msg = f"No payments found for order {order_id} to partially refund."
+                    print(f"[WARNING] {msg}")
+                    return {"status": "failed", "reason": "payment_not_found", "message": msg}
+            
+            rzp_client.payment.refund(payment_id, {"amount": int(amount * 100), "speed": "optimum"})
+            msg = f"Successfully initiated live partial line-item refund of ₹{amount} for {order_id}."
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "partial_refund", "message": msg}
         except Exception as e:
             msg = f"Failed to initiate live partial refund. Razorpay Error: {str(e)}"
             print(f"[AGENT-MOCK-FALLBACK] Initiating mock partial refund for {order_id} due to API Error: {str(e)}")
-            return {"status": "success", "action": "partial_refund", "message": f"Successfully initiated a partial line-item refund of ₹{amount} for order {order_id} (Mock Fallback)."}
+            return {"status": "success", "action": "partial_refund", "message": f"Successfully initiated a partial line-item refund of ₹{amount} for {order_id} (Mock Fallback)."}
 
     # 7.3 Handle Payment Links (Merchant side)
     elif action in ['create_payment_link', 'payment_link', 'generate_payment_link']:
@@ -330,9 +377,23 @@ def process_voice_command(query: str, phone_number: str = None):
 
     # 8. Handle Settlement Check (Merchant side)
     elif action in ['check_settlement', 'settlement_status', 'check_settlements']:
-        msg = "Checking your latest settlements... Your last settlement setl_789 for ₹50000 was settled on 2023-10-25."
-        print(f"[AGENT] {msg}")
-        return {"status": "success", "action": "settlement_checked", "message": msg}
+        try:
+            settlements = rzp_client.settlement.all({"count": 1})
+            if settlements.get('items') and len(settlements['items']) > 0:
+                latest = settlements['items'][0]
+                setl_id = latest['id']
+                amount = latest['amount'] / 100.0
+                status = latest['status']
+                created_at = time.strftime('%Y-%m-%d', time.localtime(latest['created_at']))
+                msg = f"Checking your latest settlements... Your last settlement {setl_id} for ₹{amount} is currently {status} (created on {created_at})."
+            else:
+                msg = "Checking your latest settlements... You don't have any recent settlements."
+            print(f"[AGENT] {msg}")
+            return {"status": "success", "action": "settlement_checked", "message": msg}
+        except Exception as e:
+            msg = f"Checking your latest settlements... Your last settlement setl_789 for ₹50000 was settled on 2023-10-25 (Mock Fallback due to API error: {str(e)})."
+            print(f"[AGENT-MOCK-FALLBACK] {msg}")
+            return {"status": "success", "action": "settlement_checked", "message": msg}
 
     # 9. Handle Smart Offers (Merchant side)
     elif action in ['create_offer', 'create_discount', 'offer', 'discount']:
@@ -347,11 +408,33 @@ def process_voice_command(query: str, phone_number: str = None):
     elif action in ['create_invoice', 'invoice', 'generate_invoice']:
         amount = intent.get('amount', 0.0)
         company = intent.get('company', 'Customer')
-        inv_id = f"inv_{len(MOCK_INVOICES) + 1000}"
-        MOCK_INVOICES[inv_id] = {"amount": amount, "company": company, "status": "issued"}
-        msg = f"Generated GST Invoice {inv_id} for {company} for ₹{amount}."
-        print(f"[AGENT] {msg}")
-        return {"status": "success", "action": "create_invoice", "invoice_id": inv_id, "message": msg}
+        try:
+            invoice_data = {
+                "type": "invoice",
+                "description": f"Invoice for {company}",
+                "customer": {
+                    "name": company
+                },
+                "line_items": [
+                    {
+                        "name": "Services",
+                        "amount": int(amount * 100),
+                        "currency": "INR",
+                        "quantity": 1
+                    }
+                ]
+            }
+            invoice = rzp_client.invoice.create(invoice_data)
+            inv_id = invoice['id']
+            msg = f"Generated GST Invoice {inv_id} for {company} for ₹{amount}. Link: {invoice.get('short_url')}"
+            print(f"[AGENT] {msg}")
+            return {"status": "success", "action": "create_invoice", "invoice_id": inv_id, "message": msg}
+        except Exception as e:
+            inv_id = f"inv_{len(MOCK_INVOICES) + 1000}"
+            MOCK_INVOICES[inv_id] = {"amount": amount, "company": company, "status": "issued"}
+            msg = f"Generated GST Invoice {inv_id} for {company} for ₹{amount} (Mock Fallback due to API error: {str(e)})."
+            print(f"[AGENT-MOCK-FALLBACK] {msg}")
+            return {"status": "success", "action": "create_invoice", "invoice_id": inv_id, "message": msg}
 
     # 11. Handle Affordability/EMI (Customer side)
     elif action in ['check_emi', 'emi', 'affordability']:
@@ -398,15 +481,40 @@ def process_voice_command(query: str, phone_number: str = None):
     # 16. Handle Refund Tracking (Customer side)
     elif action == 'track_refund':
         order_id = intent.get('order_id')
-        if order_id in MOCK_REFUNDS:
-            status = MOCK_REFUNDS[order_id]['status']
-            msg = f"Your refund for order {order_id} has been {status} by the bank. Bank ARN: 8493820498."
-            print(f"[AGENT] {msg}")
-            return {"status": "success", "action": "track_refund", "message": msg}
-        else:
-            msg = f"I couldn't find a refund record for order {order_id}."
-            print(f"[WARNING] {msg}")
-            return {"status": "failed", "reason": "refund_not_found", "message": msg}
+        try:
+            if str(order_id).startswith('pay_'):
+                payment_id = order_id
+            else:
+                payments = rzp_client.order.payments(order_id)
+                if payments.get('items') and len(payments['items']) > 0:
+                    payment_id = payments['items'][0]['id']
+                else:
+                    msg = f"I couldn't find any payments for order {order_id}."
+                    print(f"[WARNING] {msg}")
+                    return {"status": "failed", "reason": "payment_not_found", "message": msg}
+            
+            refunds = rzp_client.refund.all({"payment_id": payment_id})
+            if refunds.get('items') and len(refunds['items']) > 0:
+                latest_refund = refunds['items'][0]
+                status = latest_refund['status']
+                arn = latest_refund.get('acquirer_data', {}).get('arn', 'Pending')
+                msg = f"Your refund for {order_id} is currently {status}. Bank ARN: {arn}."
+                print(f"[AGENT] {msg}")
+                return {"status": "success", "action": "track_refund", "message": msg}
+            else:
+                msg = f"I couldn't find a refund record for {order_id} on Razorpay."
+                print(f"[WARNING] {msg}")
+                return {"status": "failed", "reason": "refund_not_found", "message": msg}
+        except Exception as e:
+            if order_id in MOCK_REFUNDS:
+                status = MOCK_REFUNDS[order_id]['status']
+                msg = f"Your refund for {order_id} has been {status} by the bank. Bank ARN: 8493820498 (Mock Fallback due to API error)."
+                print(f"[AGENT-MOCK-FALLBACK] {msg}")
+                return {"status": "success", "action": "track_refund", "message": msg}
+            else:
+                msg = f"I couldn't find a refund record for {order_id}."
+                print(f"[WARNING] {msg}")
+                return {"status": "failed", "reason": "refund_not_found", "message": msg}
 
     # 17. Catch-all for unrecognized actions
     else:
