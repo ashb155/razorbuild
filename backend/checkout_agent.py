@@ -121,6 +121,7 @@ def process_voice_command(query: str, phone_number: str = None):
         matches = difflib.get_close_matches(item, inventory.keys(), n=1, cutoff=0.6)
         if matches:
             item = matches[0]
+            product = inventory.get(item, {"name": item.replace("_", " ")})
             stock = inventory[item]['stock']
             price = inventory[item]['price']
             
@@ -159,7 +160,7 @@ def process_voice_command(query: str, phone_number: str = None):
                     link = plink.get('short_url')
                     MOCK_ORDERS[link_id] = {"status": "created", "total": total_price / 100}
                     MOCK_CART.clear()
-                    msg = f"I've prepared your order for {requested_qty} {item}(s). The total is ₹{price * requested_qty}. Please complete your payment here: {link}"
+                    msg = f"I've prepared your order for {requested_qty} {product['name']}. The total is ₹{price * requested_qty}. Please complete your payment here: {link}"
                     print(f"[AGENT] {msg}")
                     return {"status": "success", "action": "checkout_with_link", "payment_link": link, "message": msg}
                 except Exception as e:
@@ -167,12 +168,13 @@ def process_voice_command(query: str, phone_number: str = None):
                     link_id = f"plink_mock_{len(MOCK_ORDERS) + 1000}"
                     MOCK_ORDERS[link_id] = {"status": "created", "total": price * requested_qty}
                     MOCK_CART.clear()
-                    msg = f"I've prepared your order for {requested_qty} {item}(s). The total is ₹{price * requested_qty}. Order ID: {link_id} (Mock Fallback)"
+                    msg = f"I've prepared your order for {requested_qty} {product['name']}. The total is ₹{price * requested_qty}. Order ID: {link_id} (Mock Fallback)"
                     print(f"[AGENT-MOCK-FALLBACK] {msg}")
                     return {"status": "success", "action": "checkout_with_link", "message": msg}
             else:
                 MOCK_CART[item] = MOCK_CART.get(item, 0) + requested_qty
-                msg = f"Successfully added {requested_qty} {item}(s) to your cart."
+                msg = f"I've added {requested_qty} {product['name']} to your cart."
+                print(f"[AUDIT] {msg}")
                 if intent.get('cross_sell'):
                     msg += f" Would you also like to add {intent['cross_sell']} to your order?"
                 print(f"[AGENT] {msg}")
@@ -220,9 +222,10 @@ def process_voice_command(query: str, phone_number: str = None):
         matches = difflib.get_close_matches(item, MOCK_CART.keys(), n=1, cutoff=0.6)
         if matches:
             removed_item = matches[0]
+            product = inventory.get(removed_item, {"name": removed_item.replace("_", " ")})
             del MOCK_CART[removed_item]
-            msg = f"Successfully removed {removed_item} from your cart."
-            print(f"[AGENT] {msg}")
+            msg = f"I've removed the {product['name']} from your cart."
+            print(f"[AUDIT] {msg}")
             return {"status": "success", "action": "removed", "message": msg}
         else:
             msg = f"You don't have '{item}' in your cart to remove."

@@ -1,6 +1,7 @@
 import os
 import onnxruntime as ort
 import numpy as np
+import librosa
 
 # Assuming the models are inside 'asrassets' in the backend directory
 # e.g., asrassets/hi, asrassets/ta, etc.
@@ -32,43 +33,81 @@ class IndicASRPipeline:
                 
                 # Load tokens
                 with open(tokens_path, "r", encoding="utf-8") as f:
-                    # Depending on exactly how your tokens.txt is formatted, 
-                    # you might need to adjust this parsing logic.
-                    self.tokens[lang] = [line.strip() for line in f.readlines()]
+                    # Token format is "<token> <id>"
+                    self.tokens[lang] = [line.strip().split()[0] for line in f.readlines()]
                 
                 print(f"Successfully loaded {lang} (Tokens: {len(self.tokens[lang])})")
             else:
                 print(f"Skipping {lang}: Model or tokens not found in {lang_dir}")
 
     def transcribe(self, lang: str, audio_array: np.ndarray) -> str:
-        """
-        Transcribes a 16kHz audio array using the loaded ONNX model.
-        audio_array should be a 1D numpy array of floats.
-        """
         if lang not in self.sessions:
             raise ValueError(f"Language '{lang}' is not loaded or supported.")
             
         session = self.sessions[lang]
         
-        # NOTE: The exact preprocessing (like extracting Mel filterbanks) 
-        # depends entirely on how the AI4Bharat Conformer was exported to ONNX.
-        # Often, it expects acoustic features (e.g., shape [batch, time, 80]) 
-        # or raw waveform (e.g., shape [batch, time]).
+        # 1. Audio Preprocessing (Mel Spectrogram for NeMo)
+        # Pre-emphasis
+        if len(audio_array) > 0:
+            audio_array = np.append(audio_array[0], audio_array[1:] - 0.97 * audio_array[:-1])
+            
+        melspec = librosa.feature.melspectrogram(
+            y=audio_array, 
+            sr=16000, 
+            n_fft=512, 
+            hop_length=160, 
+            win_length=320,
+            window='hann',
+            center=True,
+            n_mels=80,
+            fmin=0.0,
+            fmax=8000.0
+        )
+        # NeMo uses log(x + 1e-5)
+        log_melspec = np.log(melspec + 1e-5).astype(np.float32)
         
-        # This is a placeholder for the actual inference call. You will need to 
-        # format the input_feed to match what the ONNX model expects.
-        print(f"Processing {len(audio_array)} samples for {lang}...")
+        # Per-utterance mean/variance normalization
+        mean = np.mean(log_melspec, axis=1, keepdims=True)
+        std = np.std(log_melspec, axis=1, keepdims=True)
+        log_melspec = (log_melspec - mean) / (std + 1e-5)
         
-        # input_name = session.get_inputs()[0].name
-        # outputs = session.run(None, {input_name: audio_array_processed})
-        # decoded_text = self._decode_output(outputs, self.tokens[lang])
+        audio_signal = np.expand_dims(log_melspec, axis=0) # Shape: [1, 80, time]
+        length_val = np.array([audio_signal.shape[2]], dtype=np.int64) # Shape: [1]
         
-        # return decoded_text
-        return f"[MOCK TRANSCRIPT FOR {lang.upper()}] - Mujhe shoes chahiye"
+        # 2. ONNX Inference
+        inputs = {
+            "audio_signal": audio_signal,
+            "length": length_val
+        }
+        outputs = session.run(None, inputs)
+        logprobs = outputs[0] # Shape: [1, time, vocab_size]
+        
+        # 3. CTC Decoding
+        decoded_text = self._decode_output(logprobs, self.tokens[lang])
+        
+        print(f"[ASR - {lang.upper()}] Transcribed: '{decoded_text}'")
+        return decoded_text
 
-    def _decode_output(self, outputs, vocab):
-        # Implementation of CTC greedy decoding or similar based on model output
-        pass
+    def _decode_output(self, logprobs, vocab):
+        predictions = np.argmax(logprobs[0], axis=-1)
+        
+        decoded_tokens = []
+        prev_token = None
+        # NeMo typically uses the last token as blank, or explicitly '<blk>'
+        blank_id = len(vocab) - 1
+        if "<blk>" in vocab:
+            blank_id = vocab.index("<blk>")
+            
+        for token_id in predictions:
+            if token_id != prev_token and token_id != blank_id:
+                if token_id < len(vocab):
+                    decoded_tokens.append(vocab[token_id])
+            prev_token = token_id
+            
+        # Join and handle sentencepiece spaces
+        text = "".join(decoded_tokens)
+        text = text.replace("\u2581", " ").replace("<unk>", "").strip()
+        return text
 
 # Singleton instance for ASR
 asr_pipeline = IndicASRPipeline()

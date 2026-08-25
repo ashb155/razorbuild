@@ -1,37 +1,82 @@
 {
-  "black jacket": {
-    "id": "item_101",
-    "name": "Premium Black Jacket",
-    "price": 2500.0,
-    "stock": 10,
-    "category": "clothing"
-  },
-  "red shoes": {
-    "id": "item_102",
-    "name": "Classic Red Shoes",
-    "price": 3000.0,
-    "stock": 0,
-    "category": "footwear"
-  },
-  "blue jeans": {
-    "id": "item_103",
-    "name": "Slim Fit Blue Jeans",
-    "price": 1800.0,
+  "wireless_headphones": {
+    "id": "item_201",
+    "name": "Noise Cancelling Wireless Headphones",
+    "price": 14999.0,
     "stock": 25,
-    "category": "clothing"
+    "category": "electronics",
+    "image": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=300&auto=format&fit=crop"
   },
-  "white sneakers": {
-    "id": "item_104",
-    "name": "Casual White Sneakers",
-    "price": 4000.0,
+  "smart_watch": {
+    "id": "item_202",
+    "name": "Titanium Smart Watch Series X",
+    "price": 24500.0,
+    "stock": 10,
+    "category": "electronics",
+    "image": "https://images.unsplash.com/photo-1546868871-7041f2a55e12?q=80&w=300&auto=format&fit=crop"
+  },
+  "running_shoes": {
+    "id": "item_203",
+    "name": "Ultra-Boost Running Shoes",
+    "price": 8500.0,
+    "stock": 40,
+    "category": "footwear",
+    "image": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=300&auto=format&fit=crop"
+  },
+  "coffee_maker": {
+    "id": "item_204",
+    "name": "Premium Espresso Coffee Maker",
+    "price": 12500.0,
+    "stock": 0,
+    "category": "home",
+    "image": "https://images.unsplash.com/photo-1517487881594-2787fef5ebf7?q=80&w=300&auto=format&fit=crop"
+  },
+  "leather_backpack": {
+    "id": "item_205",
+    "name": "Handcrafted Leather Backpack",
+    "price": 6000.0,
+    "stock": 15,
+    "category": "accessories",
+    "image": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?q=80&w=300&auto=format&fit=crop"
+  },
+  "mechanical_keyboard": {
+    "id": "item_206",
+    "name": "RGB Mechanical Keyboard",
+    "price": 9500.0,
     "stock": 5,
-    "category": "footwear"
+    "category": "electronics",
+    "image": "https://images.unsplash.com/photo-1595225476474-87563907a212?q=80&w=300&auto=format&fit=crop"
   },
-  "blue socks": {
-    "id": "item_105",
-    "name": "Cotton Blue Socks",
-    "price": 250.0,
+  "sunglasses": {
+    "id": "item_207",
+    "name": "Polarized Aviator Sunglasses",
+    "price": 4200.0,
     "stock": 50,
-    "category": "accessories"
+    "category": "accessories",
+    "image": "https://images.unsplash.com/photo-1511499767150-a48a237f0083?q=80&w=300&auto=format&fit=crop"
+  },
+  "yoga_mat": {
+    "id": "item_208",
+    "name": "Eco-Friendly Non-Slip Yoga Mat",
+    "price": 1800.0,
+    "stock": 0,
+    "category": "fitness",
+    "image": "https://images.unsplash.com/photo-1601925260368-ae2f83cf8b7f?q=80&w=300&auto=format&fit=crop"
+  },
+  "water_bottle": {
+    "id": "item_209",
+    "name": "Insulated Stainless Steel Bottle",
+    "price": 1200.0,
+    "stock": 100,
+    "category": "fitness",
+    "image": "https://images.unsplash.com/photo-1602143407151-7111542de6e8?q=80&w=300&auto=format&fit=crop"
+  },
+  "gaming_mouse": {
+    "id": "item_210",
+    "name": "Wireless Ergonomic Gaming Mouse",
+    "price": 5500.0,
+    "stock": 12,
+    "category": "electronics",
+    "image": "https://images.unsplash.com/photo-1527814050087-193c0d83ccdb?q=80&w=300&auto=format&fit=crop"
   }
 }
