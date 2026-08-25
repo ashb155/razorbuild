@@ -23,22 +23,15 @@ def load_inventory():
         return json.load(f)
 
 # Mock databases for the remaining intents
-MOCK_CART = {"black jacket": {"qty": 1}}
-MOCK_ORDERS = {
-    "123": {"status": "shipped", "total": 2500},
-    "456": {"status": "processing", "total": 1800}
-}
-MOCK_SETTLEMENTS = {
-    "setl_789": {"status": "settled", "amount": 50000, "date": "2023-10-25"}
-}
+MOCK_CART = {}
+MOCK_ORDERS = {}
+MOCK_SETTLEMENTS = {}
 MOCK_OFFERS = {}
 MOCK_INVOICES = {}
 MOCK_PAYOUTS = {}
 MOCK_SAVED_CARDS = []
-MOCK_REFUNDS = {"456": {"status": "processed"}}
-MOCK_SUBSCRIPTIONS = {
-    "sub_444": {"status": "active", "plan": "Monthly Premium"}
-}
+MOCK_REFUNDS = {}
+MOCK_SUBSCRIPTIONS = {}
 
 def suggest_alternative(inventory, out_of_stock_item):
     """Finds an alternative item in the same category."""
@@ -162,16 +155,23 @@ def process_voice_command(query: str, phone_number: str = None):
                         "notify": {"sms": False, "email": False}
                     }
                     plink = rzp_client.payment_link.create(payment_link_data)
+                    link_id = plink.get('id')
                     link = plink.get('short_url')
+                    MOCK_ORDERS[link_id] = {"status": "created", "total": total_price / 100}
+                    MOCK_CART.clear()
                     msg = f"I've prepared your order for {requested_qty} {item}(s). The total is ₹{price * requested_qty}. Please complete your payment here: {link}"
                     print(f"[AGENT] {msg}")
                     return {"status": "success", "action": "checkout_with_link", "payment_link": link, "message": msg}
                 except Exception as e:
                     print(f"[ERROR] Payment Link Gen Error: {e}")
-                    msg = f"Successfully added {requested_qty} {item}(s) to your cart. (Failed to generate payment link)"
-                    print(f"[AGENT] {msg}")
-                    return {"status": "success", "action": "added", "message": msg}
+                    link_id = f"plink_mock_{len(MOCK_ORDERS) + 1000}"
+                    MOCK_ORDERS[link_id] = {"status": "created", "total": price * requested_qty}
+                    MOCK_CART.clear()
+                    msg = f"I've prepared your order for {requested_qty} {item}(s). The total is ₹{price * requested_qty}. Order ID: {link_id} (Mock Fallback)"
+                    print(f"[AGENT-MOCK-FALLBACK] {msg}")
+                    return {"status": "success", "action": "checkout_with_link", "message": msg}
             else:
+                MOCK_CART[item] = MOCK_CART.get(item, 0) + requested_qty
                 msg = f"Successfully added {requested_qty} {item}(s) to your cart."
                 if intent.get('cross_sell'):
                     msg += f" Would you also like to add {intent['cross_sell']} to your order?"
@@ -219,7 +219,9 @@ def process_voice_command(query: str, phone_number: str = None):
     elif action in ['remove', 'delete', 'remove_from_cart', 'remove_item'] and item:
         matches = difflib.get_close_matches(item, MOCK_CART.keys(), n=1, cutoff=0.6)
         if matches:
-            msg = f"Successfully removed {matches[0]} from your cart."
+            removed_item = matches[0]
+            del MOCK_CART[removed_item]
+            msg = f"Successfully removed {removed_item} from your cart."
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "removed", "message": msg}
         else:
@@ -267,11 +269,12 @@ def process_voice_command(query: str, phone_number: str = None):
     elif action in ['cancel', 'cancel_order']:
         order_id = intent.get('order_id')
         if order_id in MOCK_ORDERS:
-            if MOCK_ORDERS[order_id]['status'] == 'shipped':
+            if MOCK_ORDERS[order_id].get('status') == 'shipped':
                 msg = f"Sorry, order {order_id} has already shipped and cannot be canceled."
                 print(f"[AGENT] {msg}")
                 return {"status": "failed", "reason": "already_shipped", "message": msg}
             else:
+                MOCK_ORDERS[order_id]['status'] = 'canceled'
                 msg = f"Order {order_id} has been successfully canceled and refunded."
                 print(f"[AGENT] {msg}")
                 return {"status": "success", "action": "canceled", "message": msg}
@@ -303,11 +306,17 @@ def process_voice_command(query: str, phone_number: str = None):
                     return {"status": "failed", "reason": "payment_not_found", "message": msg}
             
             rzp_client.payment.refund(payment_id, {"speed": "optimum"})
+            MOCK_ORDERS[order_id] = MOCK_ORDERS.get(order_id, {})
+            MOCK_ORDERS[order_id]['status'] = 'refunded'
+            MOCK_REFUNDS[order_id] = {'status': 'processed'}
             msg = f"Successfully initiated live Razorpay refund for {order_id}."
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "refund", "message": msg}
         except Exception as e:
             msg = f"Failed to initiate live refund. Razorpay Error: {str(e)}"
+            MOCK_ORDERS[order_id] = MOCK_ORDERS.get(order_id, {})
+            MOCK_ORDERS[order_id]['status'] = 'refunded'
+            MOCK_REFUNDS[order_id] = {'status': 'processed'}
             print(f"[AGENT-MOCK-FALLBACK] Initiating mock refund for {order_id} due to API Error: {str(e)}")
             return {"status": "success", "action": "refund", "message": f"Successfully initiated refund for {order_id} (Mock Fallback)."}
 
@@ -349,6 +358,8 @@ def process_voice_command(query: str, phone_number: str = None):
                     "contact": phone_number or "+919876543210"
                 }
             })
+            link_id = plink.get('id')
+            MOCK_ORDERS[link_id] = {"status": "created", "total": amount}
             msg = f"Generated a LIVE Razorpay Payment Link for ₹{amount}: {plink['short_url']}"
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "create_payment_link", "payment_link": plink['short_url'], "message": msg}
@@ -426,6 +437,7 @@ def process_voice_command(query: str, phone_number: str = None):
             }
             invoice = rzp_client.invoice.create(invoice_data)
             inv_id = invoice['id']
+            MOCK_INVOICES[inv_id] = {"amount": amount, "company": company, "status": "issued"}
             msg = f"Generated GST Invoice {inv_id} for {company} for ₹{amount}. Link: {invoice.get('short_url')}"
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "create_invoice", "invoice_id": inv_id, "message": msg}
