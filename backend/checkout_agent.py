@@ -33,6 +33,28 @@ MOCK_SAVED_CARDS = []
 MOCK_REFUNDS = {}
 MOCK_SUBSCRIPTIONS = {}
 
+def find_item_in_inventory(item: str, inventory: dict):
+    """Robust fuzzy matching against both keys and human-readable names."""
+    if not item:
+        return None
+    item_lower = item.lower()
+    
+    if item_lower in inventory:
+        return item_lower
+        
+    # Match against keys
+    matches = difflib.get_close_matches(item_lower, inventory.keys(), n=1, cutoff=0.5)
+    if matches:
+        return matches[0]
+        
+    # Match against human-readable names
+    name_to_key = {v['name'].lower(): k for k, v in inventory.items()}
+    matches = difflib.get_close_matches(item_lower, name_to_key.keys(), n=1, cutoff=0.5)
+    if matches:
+        return name_to_key[matches[0]]
+        
+    return None
+
 def suggest_alternative(inventory, out_of_stock_item):
     """Finds an alternative item in the same category."""
     out_of_stock_data = inventory.get(out_of_stock_item)
@@ -63,6 +85,28 @@ def suggest_any_alternative(inventory, search_term):
     for item_name, data in inventory.items():
         if data['stock'] > 0:
             return item_name
+    return None
+
+def get_cross_sell(inventory, item):
+    """Suggests a complimentary item based on category."""
+    item_data = inventory.get(item)
+    if not item_data: return None
+    
+    cat = item_data.get('category')
+    
+    cross_map = {
+        'watch': 'headphones',
+        'smartphone': 'headphones',
+        'shoes': 'clothing',
+        'clothing': 'shoes',
+        'laptop': 'accessories',
+        'accessories': 'laptop'
+    }
+    target_cat = cross_map.get(cat, cat)
+    
+    for k, v in inventory.items():
+        if k != item and v.get('category') == target_cat and v.get('stock', 0) > 0:
+            return v['name']
     return None
 
 def process_voice_command(query: str, phone_number: str = None):
@@ -100,9 +144,9 @@ def process_voice_command(query: str, phone_number: str = None):
     
     # 2. Handle Price Checking (Search)
     if action in ['search', 'price_check', 'find', 'query'] and item:
-        matches = difflib.get_close_matches(item, inventory.keys(), n=1, cutoff=0.6)
-        if matches:
-            item = matches[0]
+        matched_item = find_item_in_inventory(item, inventory)
+        if matched_item:
+            item = matched_item
             product = inventory.get(item, {"name": item.replace("_", " ")})
             price = inventory[item]['price']
             stock = inventory[item]['stock']
@@ -122,17 +166,82 @@ def process_voice_command(query: str, phone_number: str = None):
             alt = suggest_any_alternative(inventory, item)
             if alt:
                 alt_name = inventory[alt]['name']
-                msg = f"I couldn't find '{item}', but we do have the {alt_name}. Would you like to check its price instead?"
+                alt_price = inventory[alt]['price']
+                msg = f"I couldn't find '{item}', but we do have the {alt_name} which costs ₹{alt_price}. Would you like me to add it to your cart?"
             else:
                 msg = f"I couldn't find '{item}' in our catalog."
             print(f"[WARNING] {msg}")
             return {"status": "failed", "reason": "item_not_found", "alternative": alt, "message": msg}
 
+    # 2.5 Handle Full Cart Checkout
+    elif action in ['checkout', 'buy', 'pay'] and (not item or item.lower() == 'cart'):
+        if not MOCK_CART:
+            msg = "Your cart is currently empty. Would you like to search for some products?"
+            print(f"[AGENT] {msg}")
+            return {"status": "failed", "reason": "empty_cart", "message": msg}
+            
+        cart_items = []
+        total_amount = 0
+        for cart_item_key, qty in MOCK_CART.items():
+            prod_name = inventory[cart_item_key]['name']
+            price = inventory[cart_item_key]['price']
+            total_amount += price * qty
+            cart_items.append(f"{qty}x {prod_name}")
+            
+        summary = ", ".join(cart_items)
+        msg = f"Your cart has {summary}. The total is ₹{total_amount}. Would you like me to generate the secure payment link now?"
+        print(f"[AGENT] {msg}")
+        return {"status": "pending_cart_confirmation", "message": msg}
+        
+    # 2.6 Handle Cart Confirmation
+    elif action == 'confirm_cart':
+        if not MOCK_CART:
+            msg = "Your cart is empty, so there's nothing to checkout!"
+            print(f"[AGENT] {msg}")
+            return {"status": "failed", "reason": "empty_cart", "message": msg}
+            
+        cart_items = []
+        total_amount = 0
+        for cart_item_key, qty in MOCK_CART.items():
+            prod_name = inventory[cart_item_key]['name']
+            price = inventory[cart_item_key]['price']
+            total_amount += price * qty
+            cart_items.append(f"{qty}x {prod_name}")
+            
+        summary = ", ".join(cart_items)
+        
+        try:
+            total_price_paise = int(total_amount * 100)
+            payment_link_data = {
+                "amount": total_price_paise,
+                "currency": "INR",
+                "description": f"Payment for cart: {summary}",
+                "customer": {
+                    "name": "Voice Assistant Customer",
+                    "contact": phone_number or "+919999999999",
+                    "email": "customer@example.com"
+                },
+                "notify": {"sms": False, "email": False}
+            }
+            plink = rzp_client.payment_link.create(payment_link_data)
+            link_id = plink.get('id')
+            link = plink.get('short_url')
+            MOCK_ORDERS[link_id] = {"status": "created", "total": total_amount}
+            MOCK_CART.clear()
+            msg = f"Perfect! I've generated your secure payment link for {summary}. You can complete your ₹{total_amount} payment here: {link}"
+            print(f"[AGENT] {msg}")
+            return {"status": "success", "action": "checkout_cart", "payment_link": link, "message": msg}
+        except Exception as e:
+            msg = f"Perfect! I've generated your payment link for {summary}. Order ID: MOCK_CART_123 (Mock Fallback)"
+            MOCK_CART.clear()
+            print(f"[AGENT-MOCK-FALLBACK] {msg}")
+            return {"status": "success", "action": "checkout_cart", "message": msg}
+
     # 3. Handle Add/Checkout Actions
     elif action in ['add', 'checkout', 'buy', 'purchase', 'add_to_cart'] and item:
-        matches = difflib.get_close_matches(item, inventory.keys(), n=1, cutoff=0.6)
-        if matches:
-            item = matches[0]
+        matched_item = find_item_in_inventory(item, inventory)
+        if matched_item:
+            item = matched_item
             product = inventory.get(item, {"name": item.replace("_", " ")})
             stock = inventory[item]['stock']
             price = inventory[item]['price']
@@ -188,8 +297,9 @@ def process_voice_command(query: str, phone_number: str = None):
                 MOCK_CART[item] = MOCK_CART.get(item, 0) + requested_qty
                 msg = f"I've added {requested_qty} {product['name']} to your cart."
                 print(f"[AUDIT] {msg}")
-                if intent.get('cross_sell'):
-                    msg += f" Would you also like to add {intent['cross_sell']} to your order?"
+                cross_sell_item = get_cross_sell(inventory, item)
+                if cross_sell_item:
+                    msg += f" Would you also like to add {cross_sell_item} to your order?"
                 print(f"[AGENT] {msg}")
                 return {"status": "success", "action": "added", "message": msg}
             

@@ -9,7 +9,7 @@ export default function RazorpayAgent({ onCartUpdate }) {
   const [messages, setMessages] = useState([
     { text: "Hello! Tap the mic to shop with voice.", sender: 'agent' }
   ]);
-  
+
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
 
@@ -18,7 +18,7 @@ export default function RazorpayAgent({ onCartUpdate }) {
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
+
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -31,7 +31,7 @@ export default function RazorpayAgent({ onCartUpdate }) {
 
       mediaRecorder.onstop = async () => {
         const webmBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        
+
         try {
           const wavBlob = await convertWebMtoWAV(webmBlob);
           sendToBackend(wavBlob);
@@ -39,14 +39,14 @@ export default function RazorpayAgent({ onCartUpdate }) {
           console.error("Audio conversion failed", e);
           sendToBackend(webmBlob); // Fallback
         }
-        
+
         stream.getTracks().forEach(track => track.stop());
       };
 
       mediaRecorder.start();
       setIsRecording(true);
       if (!isOpen) setIsOpen(true);
-      
+
     } catch (err) {
       console.error("Mic access denied", err);
       setMessages(prev => [...prev, { text: "Microphone access denied. Please allow it in your browser.", sender: 'agent' }]);
@@ -65,7 +65,7 @@ export default function RazorpayAgent({ onCartUpdate }) {
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const arrayBuffer = await webmBlob.arrayBuffer();
     const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    
+
     const sampleRate = audioBuffer.sampleRate;
     const length = audioBuffer.length;
     const result = new Float32Array(length);
@@ -112,34 +112,34 @@ export default function RazorpayAgent({ onCartUpdate }) {
     try {
       const res = await axios.post('http://127.0.0.1:8000/api/process-voice', formData);
       const data = res.data;
-      
+
       // First, remove the processing message
       setMessages(prev => prev.filter(m => !m.isProcessing));
-      
+
       if (data.status === "success") {
-          const transcription = data.transcription || "Unknown";
-          const agentRes = data.agent_response;
-          
-          // Show what the user said
-          setMessages(prev => [...prev, { text: transcription, sender: 'user' }]);
-          
-          // Show agent response
-          setMessages(prev => [...prev, {
-            text: agentRes.message || "Done.",
-            sender: 'agent',
-            link: agentRes.payment_link || agentRes.invoice_id
-          }]);
-          
-          // Trigger cart refresh if onCartUpdate is provided
-          if (onCartUpdate) {
-            onCartUpdate();
-          }
+        const transcription = data.transcription || "Unknown";
+        const agentRes = data.agent_response;
+
+        // Show what the user said
+        setMessages(prev => [...prev, { text: transcription, sender: 'user' }]);
+
+        // Show agent response
+        setMessages(prev => [...prev, {
+          text: agentRes.message || "Done.",
+          sender: 'agent',
+          link: agentRes.payment_link || agentRes.invoice_id
+        }]);
+
+        // Trigger cart refresh if onCartUpdate is provided
+        if (onCartUpdate) {
+          onCartUpdate();
+        }
       } else {
-         setMessages(prev => [...prev, {
-            text: data.error || "An error occurred on the server.", sender: 'agent'
-          }]);
+        setMessages(prev => [...prev, {
+          text: data.error || "An error occurred on the server.", sender: 'agent'
+        }]);
       }
-      
+
     } catch (err) {
       console.error(err);
       setMessages(prev => prev.filter(m => !m.isProcessing).concat({
@@ -156,35 +156,34 @@ export default function RazorpayAgent({ onCartUpdate }) {
             <MessageSquare size={18} />
             <span>Razorpay Voice</span>
           </div>
-          <select 
-            className="lang-select" 
-            value={language} 
+          <select
+            className="lang-select"
+            value={language}
             onChange={(e) => setLanguage(e.target.value)}
           >
             <option value="en">English</option>
             <option value="hi">Hindi</option>
-            <option value="mr">Marathi</option>
-            <option value="ta">Tamil</option>
+            <option value="kn">Kannada</option>
           </select>
           <X size={18} style={{ cursor: 'pointer' }} onClick={() => setIsOpen(false)} />
         </div>
-        
+
         <div className="chat-messages">
           {messages.map((m, idx) => (
             <div key={idx} className={`msg msg-${m.sender} ${m.isProcessing ? 'pulsing' : ''}`}>
               {m.text}
               {m.link && typeof m.link === 'string' && m.link.startsWith('http') && (
-                <div style={{marginTop: '10px'}}>
+                <div style={{ marginTop: '10px' }}>
                   <a href={m.link} target="_blank" rel="noreferrer" className="pay-btn">Proceed to Pay ↗</a>
                 </div>
               )}
             </div>
           ))}
         </div>
-        
+
         <div className="chat-input-area">
           <div className="input-placeholder">Tap to speak...</div>
-          <button 
+          <button
             className={`mic-btn ${isRecording ? 'recording' : ''}`}
             onClick={isRecording ? stopRecording : startRecording}
           >
@@ -192,7 +191,7 @@ export default function RazorpayAgent({ onCartUpdate }) {
           </button>
         </div>
       </div>
-      
+
       {!isOpen && (
         <button className="floating-chat-btn" onClick={() => setIsOpen(true)}>
           <MessageSquare size={24} />

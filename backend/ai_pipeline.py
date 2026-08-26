@@ -11,7 +11,7 @@ class IndicASRPipeline:
     def __init__(self):
         self.sessions = {}
         self.tokens = {}
-        self.supported_languages = ["hi", "kn", "ml", "mr", "ta", "te"]
+        self.supported_languages = ["hi", "kn"]
         
         print("Initializing Indic ASR Pipeline...")
         self._load_models()
@@ -28,6 +28,7 @@ class IndicASRPipeline:
                 # Load the ONNX model
                 # Using CPUExecutionProvider for standard CPU inference
                 session_opts = ort.SessionOptions()
+                session_opts.intra_op_num_threads = 2
                 session = ort.InferenceSession(model_path, sess_options=session_opts, providers=["CPUExecutionProvider"])
                 self.sessions[lang] = session
                 
@@ -121,15 +122,54 @@ class SarvamIntentPipeline:
         
     def _load_model(self):
         try:
-            from llama_cpp import Llama
+            from llama_cpp import Llama, LlamaGrammar
+            import json
             if os.path.exists(self.model_path):
                 print(f"Loading Sarvam-1 GGUF from {self.model_path}...")
                 self.llm = Llama(model_path=self.model_path, n_ctx=2048, verbose=False)
+                
+                schema = {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string"},
+                        "item": {"type": "string"},
+                        "quantity": {"type": "integer"},
+                        "size": {"type": "string"},
+                        "order_id": {"type": "string"},
+                        "amount": {"type": "number"},
+                        "sub_id": {"type": "string"},
+                        "topic": {"type": "string"},
+                        "discount_percent": {"type": "integer"},
+                        "company": {"type": "string"},
+                        "recipient": {"type": "string"},
+                        "split_percent": {"type": "integer"},
+                        "card_network": {"type": "string"},
+                        "cross_sell": {"type": "string"}
+                    },
+                    "required": ["action"]
+                }
+                self.grammar = LlamaGrammar.from_json_schema(json.dumps(schema))
+                
                 print("Successfully loaded Sarvam-1.")
             else:
                 print(f"Skipping Sarvam-1: Model not found at {self.model_path}")
         except ImportError:
             print("Skipping Sarvam-1: llama-cpp-python is not installed.")
+            
+    def _enforce_intent_rules(self, intent: dict) -> dict:
+        intent.setdefault('quantity', 1)
+        intent.setdefault('size', None)
+        intent.setdefault('cross_sell', None)
+        intent.setdefault('requires_confirmation', False)
+        
+        # Enforce gating on money actions
+        if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr']:
+            intent['requires_confirmation'] = True
+            
+        # For pay action, keep only order_id (remove item if present)
+        if intent.get('action') == 'pay' and 'order_id' in intent:
+            intent.pop('item', None)
+        return intent
             
     def extract_intent(self, text: str) -> dict:
         if not self.llm:
@@ -138,7 +178,7 @@ class SarvamIntentPipeline:
         
         # Prompt with examples to guide the LLM
         prompt = f"""Extract the user intent as a JSON object. Include the following fields when applicable:
-- action (search, add, checkout, pay, remove, track, cancel, refund, create_payment_link, cancel_subscription, check_settlement, faq, create_offer, check_emi, create_invoice, payout, split_payment, create_qr, save_card, track_refund, handle_failed_payment, magic_checkout_address, check_offers, partial_refund)
+- action (search, add, checkout, pay, remove, track, cancel, refund, create_payment_link, cancel_subscription, check_settlement, faq, create_offer, check_emi, create_invoice, payout, split_payment, create_qr, save_card, track_refund, handle_failed_payment, magic_checkout_address, check_offers, partial_refund, confirm_cart)
 - item (the product or entity)
 - quantity (default 1 if not mentioned)
 - size (null if not mentioned)
@@ -209,6 +249,15 @@ Result: {{ "action": "cancel_subscription", "sub_id": "sub_999", "requires_confi
 User: "what are the charges for UPI?"
 Result: {{ "action": "faq", "topic": "upi charges" }}
 
+User: "yes please generate the link"
+Result: {{ "action": "confirm_cart", "requires_confirmation": false }}
+
+User: "मुझे नॉइज़ कलर फिट प्रो फोर चाहिए"
+Result: {{ "action": "add", "item": "noise color fit pro 4", "requires_confirmation": false }}
+
+User: "क्या आपके पास ब्लैक जैकेट है?"
+Result: {{ "action": "search", "item": "black jacket", "requires_confirmation": false }}
+
 User: "मुझे मेरा ऑर्डर 98765 रिफंड चाहिए"
 Result: {{ "action": "refund", "order_id": "98765", "requires_confirmation": true }}
 
@@ -241,7 +290,8 @@ Result:"""
             max_tokens=150,
             stop=["\n", "}"],
             echo=False,
-            temperature=0.1
+            temperature=0.1,
+            grammar=self.grammar
         )
         
         raw = response['choices'][0]['text']
@@ -254,124 +304,9 @@ Result:"""
         try:
             import json
             intent = json.loads(output_text)
-            # Apply defaults
-            intent.setdefault('quantity', 1)
-            intent.setdefault('size', None)
-            intent.setdefault('cross_sell', None)
-            intent.setdefault('requires_confirmation', False)
-            
-            # Enforce gating on money actions
-            if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr', 'checkout']:
-                intent['requires_confirmation'] = True
-                
-            # For pay action, keep only order_id (remove item if present)
-            if intent.get('action') == 'pay' and 'order_id' in intent:
-                intent.pop('item', None)
-            return intent
+            return self._enforce_intent_rules(intent)
         except Exception as e:
-            import ast, re
-            try:
-                intent = ast.literal_eval(output_text)
-                if isinstance(intent, dict):
-                    intent.setdefault('quantity', 1)
-                    intent.setdefault('size', None)
-                    intent.setdefault('cross_sell', None)
-                    intent.setdefault('requires_confirmation', False)
-                    
-                    if intent.get('action') in ['pay', 'refund', 'partial_refund', 'create_payment_link', 'cancel_subscription', 'create_offer', 'create_invoice', 'payout', 'split_payment', 'create_qr', 'checkout']:
-                        intent['requires_confirmation'] = True
-                        
-                    if intent.get('action') == 'pay' and 'order_id' in intent:
-                        intent.pop('item', None)
-                    return intent
-            except Exception:
-                pass
-            
-            print(f"Failed to parse JSON from Sarvam: {output_text}")
-            
-            # Fallback regex parsing for robustness
-            lowered = text.lower()
-            intent = {"action": "unknown", "item": "unknown"}
-
-            # refund intent
-            refund_match = re.search(r'refund\s+.*?order\s+([a-zA-Z0-9_]+)', lowered)
-            if refund_match:
-                intent["action"] = "refund"
-                intent["order_id"] = refund_match.group(1)
-                intent["requires_confirmation"] = True
-                intent.pop("item", None)
-                return intent
-                
-            # payment link intent
-            link_match = re.search(r'payment\s+link\s+for\s+([\d\.]+)', lowered)
-            if link_match:
-                intent["action"] = "create_payment_link"
-                intent["amount"] = float(link_match.group(1))
-                intent["requires_confirmation"] = True
-                intent.pop("item", None)
-                return intent
-                
-            # subscription intent
-            sub_match = re.search(r'cancel\s+subscription\s+([a-zA-Z0-9_]+)', lowered)
-            if sub_match:
-                intent["action"] = "cancel_subscription"
-                intent["sub_id"] = sub_match.group(1)
-                intent["requires_confirmation"] = True
-                intent.pop("item", None)
-                return intent
-
-            # faq intent
-            faq_match = re.search(r'charges\s+for\s+(.+)', lowered)
-            if faq_match:
-                intent["action"] = "faq"
-                intent["topic"] = faq_match.group(1).strip("?")
-                intent.pop("item", None)
-                return intent
-
-            # offer intent
-            offer_match = re.search(r'create\s+a\s+(\d+)\s*(?:%|percent)\s+discount', lowered)
-            if offer_match:
-                intent["action"] = "create_offer"
-                intent["discount_percent"] = int(offer_match.group(1))
-                intent["requires_confirmation"] = True
-                intent.pop("item", None)
-                return intent
-
-            # invoice intent
-            invoice_match = re.search(r'invoice\s+of\s+([\d\.]+)\s+to\s+(.+)', lowered)
-            if invoice_match:
-                intent["action"] = "create_invoice"
-                intent["amount"] = float(invoice_match.group(1))
-                intent["company"] = invoice_match.group(2).strip()
-                intent["requires_confirmation"] = True
-                intent.pop("item", None)
-                return intent
-                
-            # emi intent
-            if "emi" in lowered:
-                intent["action"] = "check_emi"
-                intent.pop("item", None)
-                return intent
-
-            # standard payment intent
-            pay_match = re.search(r'pay\s+(?:for\s+)?order\s+(\d+)', lowered)
-            if pay_match:
-                intent["action"] = "pay"
-                intent["order_id"] = pay_match.group(1)
-                intent["requires_confirmation"] = True
-                intent.pop("item", None)
-                return intent
-
-            # generic search fallback
-            search_match = re.search(r'([^\s]+)\s+(.+)', lowered)
-            if search_match:
-                intent["action"] = "search"
-                intent["item"] = search_match.group(2).strip()
-                intent["quantity"] = 1
-                intent["size"] = None
-                return intent
-
-            # If still failing, return unknown with raw output
+            print(f"Failed to parse JSON from Sarvam: {output_text} due to {e}")
             return {"action": "unknown", "item": "unknown", "raw_output": output_text}
 
 intent_pipeline = SarvamIntentPipeline()
