@@ -1,82 +1,402 @@
 {
-  "wireless_headphones": {
-    "id": "item_201",
-    "name": "Noise Cancelling Wireless Headphones",
-    "price": 14999.0,
-    "stock": 25,
-    "category": "electronics",
-    "image": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=300&auto=format&fit=crop"
-  },
-  "smart_watch": {
-    "id": "item_202",
-    "name": "Titanium Smart Watch Series X",
-    "price": 24500.0,
-    "stock": 10,
-    "category": "electronics",
-    "image": "https://images.unsplash.com/photo-1546868871-7041f2a55e12?q=80&w=300&auto=format&fit=crop"
-  },
-  "running_shoes": {
-    "id": "item_203",
-    "name": "Ultra-Boost Running Shoes",
-    "price": 8500.0,
-    "stock": 40,
-    "category": "footwear",
-    "image": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=300&auto=format&fit=crop"
-  },
-  "coffee_maker": {
-    "id": "item_204",
-    "name": "Premium Espresso Coffee Maker",
-    "price": 12500.0,
-    "stock": 0,
-    "category": "home",
-    "image": "https://images.unsplash.com/photo-1517487881594-2787fef5ebf7?q=80&w=300&auto=format&fit=crop"
-  },
-  "leather_backpack": {
-    "id": "item_205",
-    "name": "Handcrafted Leather Backpack",
-    "price": 6000.0,
-    "stock": 15,
-    "category": "accessories",
-    "image": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?q=80&w=300&auto=format&fit=crop"
-  },
-  "mechanical_keyboard": {
-    "id": "item_206",
-    "name": "RGB Mechanical Keyboard",
-    "price": 9500.0,
-    "stock": 5,
-    "category": "electronics",
-    "image": "https://images.unsplash.com/photo-1595225476474-87563907a212?q=80&w=300&auto=format&fit=crop"
-  },
-  "sunglasses": {
-    "id": "item_207",
-    "name": "Polarized Aviator Sunglasses",
-    "price": 4200.0,
-    "stock": 50,
-    "category": "accessories",
-    "image": "https://images.unsplash.com/photo-1511499767150-a48a237f0083?q=80&w=300&auto=format&fit=crop"
-  },
-  "yoga_mat": {
-    "id": "item_208",
-    "name": "Eco-Friendly Non-Slip Yoga Mat",
-    "price": 1800.0,
-    "stock": 0,
-    "category": "fitness",
-    "image": "https://images.unsplash.com/photo-1601925260368-ae2f83cf8b7f?q=80&w=300&auto=format&fit=crop"
-  },
-  "water_bottle": {
-    "id": "item_209",
-    "name": "Insulated Stainless Steel Bottle",
-    "price": 1200.0,
-    "stock": 100,
-    "category": "fitness",
-    "image": "https://images.unsplash.com/photo-1602143407151-7111542de6e8?q=80&w=300&auto=format&fit=crop"
-  },
-  "gaming_mouse": {
-    "id": "item_210",
-    "name": "Wireless Ergonomic Gaming Mouse",
-    "price": 5500.0,
-    "stock": 12,
-    "category": "electronics",
-    "image": "https://images.unsplash.com/photo-1527814050087-193c0d83ccdb?q=80&w=300&auto=format&fit=crop"
-  }
+    "boat_earbuds": {
+        "id": "item_100",
+        "name": "boAt Airdopes 141",
+        "price": 1299.0,
+        "stock": 0,
+        "category": "headphones",
+        "image": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=300&q=80"
+    },
+    "noise_smartwatch": {
+        "id": "item_101",
+        "name": "Noise ColorFit Pro 4",
+        "price": 2499.0,
+        "stock": 50,
+        "category": "watch",
+        "image": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=300&q=80"
+    },
+    "samsung_m14": {
+        "id": "item_102",
+        "name": "Samsung Galaxy M14 5G",
+        "price": 13490.0,
+        "stock": 79,
+        "category": "smartphone",
+        "image": "https://images.unsplash.com/photo-1519326882834-04c334752f58?auto=format&fit=crop&w=300&q=80"
+    },
+    "redmi_12": {
+        "id": "item_103",
+        "name": "Redmi 12C",
+        "price": 8999.0,
+        "stock": 47,
+        "category": "smartphone",
+        "image": "https://images.unsplash.com/photo-1519326882834-04c334752f58?auto=format&fit=crop&w=300&q=80"
+    },
+    "hp_laptop": {
+        "id": "item_104",
+        "name": "HP 15s Ryzen 5",
+        "price": 39990.0,
+        "stock": 144,
+        "category": "laptop",
+        "image": "https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=300&q=80"
+    },
+    "lenovo_ideapad": {
+        "id": "item_105",
+        "name": "Lenovo IdeaPad Slim 3",
+        "price": 35990.0,
+        "stock": 100,
+        "category": "laptop",
+        "image": "https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=300&q=80"
+    },
+    "prestige_cooker": {
+        "id": "item_106",
+        "name": "Prestige Svachh Pressure Cooker 3L",
+        "price": 1450.0,
+        "stock": 17,
+        "category": "kitchen",
+        "image": "https://images.unsplash.com/photo-1568317488475-07e30033242f?auto=format&fit=crop&w=300&q=80"
+    },
+    "pigeon_pan": {
+        "id": "item_107",
+        "name": "Pigeon Non-Stick Fry Pan",
+        "price": 599.0,
+        "stock": 98,
+        "category": "kitchen",
+        "image": "https://images.unsplash.com/photo-1568317488475-07e30033242f?auto=format&fit=crop&w=300&q=80"
+    },
+    "bajaj_mixer": {
+        "id": "item_108",
+        "name": "Bajaj Rex 500W Mixer Grinder",
+        "price": 2199.0,
+        "stock": 0,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "philips_trimmer": {
+        "id": "item_109",
+        "name": "Philips OneBlade Trimmer",
+        "price": 1749.0,
+        "stock": 63,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "milton_bottle": {
+        "id": "item_110",
+        "name": "Milton Thermosteel 1L Flask",
+        "price": 950.0,
+        "stock": 48,
+        "category": "bottle",
+        "image": "https://images.unsplash.com/photo-1602143407151-7111542de6e8?auto=format&fit=crop&w=300&q=80"
+    },
+    "tata_tea": {
+        "id": "item_111",
+        "name": "Tata Tea Premium 1kg",
+        "price": 450.0,
+        "stock": 49,
+        "category": "food",
+        "image": "https://images.unsplash.com/photo-1562707849-c4b10a71f1df?auto=format&fit=crop&w=300&q=80"
+    },
+    "aashirvaad_atta": {
+        "id": "item_112",
+        "name": "Aashirvaad Select Sharbati Atta 5kg",
+        "price": 320.0,
+        "stock": 55,
+        "category": "food",
+        "image": "https://images.unsplash.com/photo-1562707849-c4b10a71f1df?auto=format&fit=crop&w=300&q=80"
+    },
+    "maggi": {
+        "id": "item_113",
+        "name": "Maggi 2-Minute Noodles 12 Pack",
+        "price": 168.0,
+        "stock": 30,
+        "category": "food",
+        "image": "https://images.unsplash.com/photo-1562707849-c4b10a71f1df?auto=format&fit=crop&w=300&q=80"
+    },
+    "mamaearth_shampoo": {
+        "id": "item_114",
+        "name": "Mamaearth Onion Shampoo",
+        "price": 349.0,
+        "stock": 16,
+        "category": "cosmetics",
+        "image": "https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=300&q=80"
+    },
+    "lakme_kajal": {
+        "id": "item_115",
+        "name": "Lakme Eyeconic Kajal",
+        "price": 199.0,
+        "stock": 96,
+        "category": "cosmetics",
+        "image": "https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=300&q=80"
+    },
+    "nivea_lotion": {
+        "id": "item_116",
+        "name": "Nivea Body Lotion 400ml",
+        "price": 299.0,
+        "stock": 0,
+        "category": "cosmetics",
+        "image": "https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=300&q=80"
+    },
+    "puma_sneakers": {
+        "id": "item_117",
+        "name": "Puma Smash v2 Sneakers",
+        "price": 2249.0,
+        "stock": 56,
+        "category": "shoes",
+        "image": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=300&q=80"
+    },
+    "sparx_sandals": {
+        "id": "item_118",
+        "name": "Sparx Men's Sandals",
+        "price": 699.0,
+        "stock": 88,
+        "category": "shoes",
+        "image": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=300&q=80"
+    },
+    "red_tape_shoes": {
+        "id": "item_119",
+        "name": "Red Tape Walking Shoes",
+        "price": 1599.0,
+        "stock": 82,
+        "category": "shoes",
+        "image": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=300&q=80"
+    },
+    "peter_england_shirt": {
+        "id": "item_120",
+        "name": "Peter England Casual Shirt",
+        "price": 999.0,
+        "stock": 100,
+        "category": "clothing",
+        "image": "https://images.unsplash.com/photo-1635274605638-d44babc08a4f?auto=format&fit=crop&w=300&q=80"
+    },
+    "levi_jeans": {
+        "id": "item_121",
+        "name": "Levi's Men 511 Slim Jeans",
+        "price": 1899.0,
+        "stock": 21,
+        "category": "clothing",
+        "image": "https://images.unsplash.com/photo-1635274605638-d44babc08a4f?auto=format&fit=crop&w=300&q=80"
+    },
+    "biba_kurta": {
+        "id": "item_122",
+        "name": "BIBA Women Cotton Kurta",
+        "price": 1199.0,
+        "stock": 110,
+        "category": "clothing",
+        "image": "https://images.unsplash.com/photo-1635274605638-d44babc08a4f?auto=format&fit=crop&w=300&q=80"
+    },
+    "skybags_backpack": {
+        "id": "item_123",
+        "name": "Skybags Brat Backpack",
+        "price": 850.0,
+        "stock": 72,
+        "category": "bag",
+        "image": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&w=300&q=80"
+    },
+    "wildcraft_bag": {
+        "id": "item_124",
+        "name": "Wildcraft 44L Rucksack",
+        "price": 2100.0,
+        "stock": 0,
+        "category": "bag",
+        "image": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&w=300&q=80"
+    },
+    "fastrack_sunglasses": {
+        "id": "item_125",
+        "name": "Fastrack Aviator Sunglasses",
+        "price": 799.0,
+        "stock": 57,
+        "category": "glasses",
+        "image": "https://images.unsplash.com/photo-1511499767150-a48a237f0083?auto=format&fit=crop&w=300&q=80"
+    },
+    "rayban_sunglasses": {
+        "id": "item_126",
+        "name": "Ray-Ban Wayfarer",
+        "price": 4500.0,
+        "stock": 46,
+        "category": "glasses",
+        "image": "https://images.unsplash.com/photo-1511499767150-a48a237f0083?auto=format&fit=crop&w=300&q=80"
+    },
+    "casio_watch": {
+        "id": "item_127",
+        "name": "Casio Vintage Digital Watch",
+        "price": 1695.0,
+        "stock": 135,
+        "category": "watch",
+        "image": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=300&q=80"
+    },
+    "titan_watch": {
+        "id": "item_128",
+        "name": "Titan Neo Analog Watch",
+        "price": 2595.0,
+        "stock": 42,
+        "category": "watch",
+        "image": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=300&q=80"
+    },
+    "jbl_speaker": {
+        "id": "item_129",
+        "name": "JBL Go 2 Bluetooth Speaker",
+        "price": 1999.0,
+        "stock": 50,
+        "category": "headphones",
+        "image": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=300&q=80"
+    },
+    "sony_headphones": {
+        "id": "item_130",
+        "name": "Sony WH-CH520 Wireless",
+        "price": 4490.0,
+        "stock": 135,
+        "category": "headphones",
+        "image": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=300&q=80"
+    },
+    "sandisk_pendrive": {
+        "id": "item_131",
+        "name": "SanDisk Ultra 64GB USB 3.0",
+        "price": 549.0,
+        "stock": 22,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "wd_harddisk": {
+        "id": "item_132",
+        "name": "WD Elements 1.5TB Hard Drive",
+        "price": 4299.0,
+        "stock": 0,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "mi_powerbank": {
+        "id": "item_133",
+        "name": "Mi 10000mAh Power Bank",
+        "price": 1199.0,
+        "stock": 106,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "boat_cable": {
+        "id": "item_134",
+        "name": "boAt Rugged Type-C Cable",
+        "price": 299.0,
+        "stock": 134,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "zebronics_keyboard": {
+        "id": "item_135",
+        "name": "Zebronics Transformer Keyboard",
+        "price": 1149.0,
+        "stock": 137,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "logitech_mouse": {
+        "id": "item_136",
+        "name": "Logitech B170 Wireless Mouse",
+        "price": 595.0,
+        "stock": 140,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "tp_link_router": {
+        "id": "item_137",
+        "name": "TP-Link Archer C6 Router",
+        "price": 2299.0,
+        "stock": 30,
+        "category": "appliance",
+        "image": "https://images.unsplash.com/photo-1756705533779-105bf34e0722?auto=format&fit=crop&w=300&q=80"
+    },
+    "pigeon_kettle": {
+        "id": "item_138",
+        "name": "Pigeon 1.5L Electric Kettle",
+        "price": 649.0,
+        "stock": 71,
+        "category": "kitchen",
+        "image": "https://images.unsplash.com/photo-1568317488475-07e30033242f?auto=format&fit=crop&w=300&q=80"
+    },
+    "butterfly_mixer": {
+        "id": "item_139",
+        "name": "Butterfly Jet 750W Mixer",
+        "price": 2899.0,
+        "stock": 42,
+        "category": "kitchen",
+        "image": "https://images.unsplash.com/photo-1568317488475-07e30033242f?auto=format&fit=crop&w=300&q=80"
+    },
+    "fortune_oil": {
+        "id": "item_140",
+        "name": "Fortune Sunlite Oil 1L",
+        "price": 145.0,
+        "stock": 0,
+        "category": "food",
+        "image": "https://images.unsplash.com/photo-1562707849-c4b10a71f1df?auto=format&fit=crop&w=300&q=80"
+    },
+    "india_gate_rice": {
+        "id": "item_141",
+        "name": "India Gate Basmati Rice 5kg",
+        "price": 499.0,
+        "stock": 90,
+        "category": "food",
+        "image": "https://images.unsplash.com/photo-1562707849-c4b10a71f1df?auto=format&fit=crop&w=300&q=80"
+    },
+    "haldiram_bhujia": {
+        "id": "item_142",
+        "name": "Haldiram's Bhujia 400g",
+        "price": 110.0,
+        "stock": 128,
+        "category": "food",
+        "image": "https://images.unsplash.com/photo-1562707849-c4b10a71f1df?auto=format&fit=crop&w=300&q=80"
+    },
+    "himalaya_facewash": {
+        "id": "item_143",
+        "name": "Himalaya Neem Face Wash",
+        "price": 150.0,
+        "stock": 39,
+        "category": "cosmetics",
+        "image": "https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=300&q=80"
+    },
+    "ponds_powder": {
+        "id": "item_144",
+        "name": "Pond's Dreamflower Talc",
+        "price": 130.0,
+        "stock": 65,
+        "category": "cosmetics",
+        "image": "https://images.unsplash.com/photo-1596462502278-27bfdc403348?auto=format&fit=crop&w=300&q=80"
+    },
+    "woodland_wallet": {
+        "id": "item_145",
+        "name": "Woodland Leather Wallet",
+        "price": 1195.0,
+        "stock": 53,
+        "category": "bag",
+        "image": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&w=300&q=80"
+    },
+    "safari_trolley": {
+        "id": "item_146",
+        "name": "Safari Ray 65cm Suitcase",
+        "price": 3499.0,
+        "stock": 23,
+        "category": "bag",
+        "image": "https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&w=300&q=80"
+    },
+    "jockey_tshirt": {
+        "id": "item_147",
+        "name": "Jockey Men's Cotton T-Shirt",
+        "price": 599.0,
+        "stock": 49,
+        "category": "clothing",
+        "image": "https://images.unsplash.com/photo-1635274605638-d44babc08a4f?auto=format&fit=crop&w=300&q=80"
+    },
+    "fabindia_kurta": {
+        "id": "item_148",
+        "name": "Fabindia Silk Blend Kurta",
+        "price": 2499.0,
+        "stock": 0,
+        "category": "clothing",
+        "image": "https://images.unsplash.com/photo-1635274605638-d44babc08a4f?auto=format&fit=crop&w=300&q=80"
+    },
+    "bata_chappal": {
+        "id": "item_149",
+        "name": "Bata Comfit Slippers",
+        "price": 499.0,
+        "stock": 15,
+        "category": "shoes",
+        "image": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=300&q=80"
+    }
 }

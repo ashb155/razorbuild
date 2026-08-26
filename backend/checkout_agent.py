@@ -103,14 +103,26 @@ def process_voice_command(query: str, phone_number: str = None):
         matches = difflib.get_close_matches(item, inventory.keys(), n=1, cutoff=0.6)
         if matches:
             item = matches[0]
+            product = inventory.get(item, {"name": item.replace("_", " ")})
             price = inventory[item]['price']
-            msg = f"The {item} costs ₹{price}. Would you like me to add it to your cart?"
+            stock = inventory[item]['stock']
+            
+            if stock > 0:
+                msg = f"The {product['name']} costs ₹{price}. Would you like me to add it to your cart?"
+            else:
+                alt = suggest_alternative(inventory, item)
+                msg = f"The {product['name']} costs ₹{price}, but it's currently out of stock."
+                if alt:
+                    alt_name = inventory[alt]['name']
+                    msg += f" However, we do have the {alt_name} in stock! Would you like to check it out?"
+                
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "price_check", "message": msg}
         else:
             alt = suggest_any_alternative(inventory, item)
             if alt:
-                msg = f"I couldn't find '{item}', but we do have {alt}. Would you like to check its price instead?"
+                alt_name = inventory[alt]['name']
+                msg = f"I couldn't find '{item}', but we do have the {alt_name}. Would you like to check its price instead?"
             else:
                 msg = f"I couldn't find '{item}' in our catalog."
             print(f"[WARNING] {msg}")
@@ -128,9 +140,10 @@ def process_voice_command(query: str, phone_number: str = None):
             # --- THE GRACEFUL FAILURE (OUT OF STOCK) ---
             if stock == 0:
                 alt = suggest_alternative(inventory, item)
-                msg = f"Sorry, {item} is currently out of stock."
+                msg = f"Sorry, the {product['name']} is currently out of stock."
                 if alt:
-                    msg += f" However, we do have {alt} in stock! Should I add that instead?"
+                    alt_name = inventory[alt]['name']
+                    msg += f" However, we do have the {alt_name} in stock! Should I add that instead?"
                 print(f"[AGENT] {msg}")
                 return {"status": "failed", "reason": "out_of_stock", "alternative": alt, "message": msg}
                 
@@ -183,7 +196,8 @@ def process_voice_command(query: str, phone_number: str = None):
         else:
             alt = suggest_any_alternative(inventory, item)
             if alt:
-                msg = f"I couldn't find '{item}'. But we do have {alt} in stock! Would you like me to add that instead?"
+                alt_name = inventory[alt]['name']
+                msg = f"I couldn't find '{item}'. But we do have the {alt_name} in stock! Would you like me to add that instead?"
             else:
                 msg = f"I couldn't find '{item}' in our catalog."
             print(f"[WARNING] {msg}")
