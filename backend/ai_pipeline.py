@@ -49,6 +49,10 @@ class IndicASRPipeline:
         
         # 1. Audio Preprocessing (Mel Spectrogram for NeMo)
         # Pre-emphasis
+        if audio_array is None or len(audio_array) == 0:
+            print(f"[ASR - {lang.upper()}] Empty audio array received, returning empty string.")
+            return ""
+            
         if len(audio_array) > 0:
             audio_array = np.append(audio_array[0], audio_array[1:] - 0.97 * audio_array[:-1])
             
@@ -171,7 +175,7 @@ class SarvamIntentPipeline:
             intent.pop('item', None)
         return intent
             
-    def extract_intent(self, text: str) -> dict:
+    def extract_intent(self, text: str, context: str = None) -> dict:
         if not self.llm:
             return {"error": "Sarvam-1 model not loaded."}
         
@@ -282,13 +286,19 @@ Result: {{ "action": "track_refund", "order_id": "456" }}
 User: "Track the refund status of pay_1234567890"
 Result: {{ "action": "track_refund", "order_id": "pay_1234567890" }}
 
+User: "वोट एयरडोप्स ऐड करना है"
+Result: {{ "action": "add", "item": "boat airdopes", "requires_confirmation": false }}
+
+Conversation Context (Recent messages):
+{context if context else 'None'}
+
 User: "{text}"
 Result:"""
         print(f"Extracting intent for text: '{text}'...")
         response = self.llm(
             prompt,
-            max_tokens=150,
-            stop=["\n", "}"],
+            max_tokens=256,
+            stop=["\n"],
             echo=False,
             temperature=0.1,
             grammar=self.grammar
@@ -297,9 +307,16 @@ Result:"""
         raw = response['choices'][0]['text']
         start = raw.find('{')
         end = raw.rfind('}')
-        output_text = raw[start:end+1] if start != -1 and end != -1 else raw.strip()
-        if not output_text.endswith("}"):
-            output_text += "}"
+        
+        if start != -1 and end != -1 and end >= start:
+            output_text = raw[start:end+1]
+        elif start != -1:
+            # Handle truncated JSON
+            output_text = raw[start:]
+            if not output_text.rstrip().endswith("}"):
+                output_text += "}"
+        else:
+            output_text = raw.strip()
             
         try:
             import json

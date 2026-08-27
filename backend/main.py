@@ -39,17 +39,19 @@ def get_inventory():
         return {"error": str(e)}
 
 @app.get("/api/cart")
-async def get_cart():
-    # Import MOCK_CART from checkout_agent
+async def get_cart(phone_number: str = "+918888888888"):
     from checkout_agent import MOCK_CART
-    return MOCK_CART
+    # Return only this session's cart as a flat {item_key: qty} dict
+    return dict(MOCK_CART.get(phone_number, {}))
 
 @app.post("/api/process-voice")
 async def process_voice(
     audio: UploadFile = File(None),
     text: str = Form(None),
     language: str = Form(...),
-    phone_number: str = Form(None)
+    phone_number: str = Form(None),
+    skip_gate: bool = Form(False),
+    context: str = Form(None)
 ):
     """
     Endpoint that the Android SDK will call.
@@ -65,9 +67,17 @@ async def process_voice(
         elif audio:
             # 1. Read audio bytes
             audio_bytes = await audio.read()
-            
+            if not audio_bytes:
+                return JSONResponse(status_code=400, content={"error": "Empty audio data received."})
+                
             # 2. Decode audio into numpy array (Expects standard WAV from Web SDK)
-            audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes))
+            try:
+                audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes))
+            except Exception as e:
+                return JSONResponse(status_code=400, content={"error": f"Invalid audio format: {str(e)}"})
+            
+            if len(audio_data) == 0:
+                return JSONResponse(status_code=400, content={"error": "Audio contains no frames."})
             
             # Ensure it's mono
             if len(audio_data.shape) > 1:
@@ -83,7 +93,9 @@ async def process_voice(
             return JSONResponse(status_code=400, content={"error": "Must provide either audio or text."})
         
         # 4. Pass the transcribed text into our Razorpay Agent Execution Engine
-        agent_response = process_voice_command(transcription, phone_number=phone_number)
+        if skip_gate:
+            context = ""
+        agent_response = process_voice_command(transcription, phone_number=phone_number, skip_gate=skip_gate, context=context)
         
         # 5. Return the unified JSON response to the Android SDK
         return {

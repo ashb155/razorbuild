@@ -9,11 +9,28 @@ export default function RazorpayAgent({ onCartUpdate }) {
   const [messages, setMessages] = useState([
     { text: "Hello! Tap the mic to shop with voice.", sender: 'agent' }
   ]);
+  const [pendingAction, setPendingAction] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
 
   const toggleChat = () => setIsOpen(!isOpen);
+
+  const speakText = (text, lang) => {
+    if (!('speechSynthesis' in window)) return;
+
+    // Stop any ongoing speech
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = lang === 'hi' ? 'hi-IN' : lang === 'kn' ? 'kn-IN' : 'en-IN';
+
+    // Slight adjustments for better sounding Indic voices
+    utterance.rate = 0.9;
+    utterance.pitch = 1.0;
+
+    window.speechSynthesis.speak(utterance);
+  };
 
   const startRecording = async () => {
     try {
@@ -103,11 +120,23 @@ export default function RazorpayAgent({ onCartUpdate }) {
     return new Blob([view], { type: 'audio/wav' });
   };
 
-  const sendToBackend = async (blob) => {
+  const sendToBackend = async (blob, isConfirmation = false, pendingText = null) => {
     const formData = new FormData();
-    formData.append('audio', blob, 'recording.wav');
+    if (blob) {
+      formData.append('audio', blob, 'recording.wav');
+    } else if (pendingText) {
+      formData.append('text', pendingText);
+    }
     formData.append('language', language);
     formData.append('phone_number', '+918888888888');
+    
+    // Add conversation context (last 4 messages)
+    const recentContext = messages.slice(-4).map(m => `${m.sender}: ${m.text}`).join('\n');
+    formData.append('context', recentContext);
+    
+    if (isConfirmation) {
+      formData.append('skip_gate', 'true');
+    }
 
     try {
       const res = await axios.post('http://127.0.0.1:8000/api/process-voice', formData);
@@ -121,14 +150,31 @@ export default function RazorpayAgent({ onCartUpdate }) {
         const agentRes = data.agent_response;
 
         // Show what the user said
-        setMessages(prev => [...prev, { text: transcription, sender: 'user' }]);
+        if (!isConfirmation) {
+          setMessages(prev => [...prev, { text: transcription, sender: 'user' }]);
+        } else {
+          setMessages(prev => [...prev, { text: "Yes, confirm", sender: 'user' }]);
+        }
+
+        const isPending = agentRes.status && agentRes.status.startsWith('pending_');
+        if (isPending && !isConfirmation) {
+          setPendingAction({ transcription, language });
+        } else {
+          setPendingAction(null);
+        }
 
         // Show agent response
         setMessages(prev => [...prev, {
           text: agentRes.message || "Done.",
           sender: 'agent',
-          link: agentRes.payment_link || agentRes.invoice_id
+          link: agentRes.payment_link || agentRes.invoice_id,
+          isConfirmationRequired: isPending && !isConfirmation
         }]);
+
+        // Speak the response using Web Speech API
+        if (agentRes.message) {
+          speakText(agentRes.message, language);
+        }
 
         // Trigger cart refresh if onCartUpdate is provided
         if (onCartUpdate) {
@@ -175,6 +221,19 @@ export default function RazorpayAgent({ onCartUpdate }) {
               {m.link && typeof m.link === 'string' && m.link.startsWith('http') && (
                 <div style={{ marginTop: '10px' }}>
                   <a href={m.link} target="_blank" rel="noreferrer" className="pay-btn">Proceed to Pay ↗</a>
+                </div>
+              )}
+              {m.isConfirmationRequired && pendingAction && (
+                <div style={{ marginTop: '10px' }}>
+                  <button 
+                    className="pay-btn" 
+                    onClick={() => {
+                      setMessages(prev => [...prev, { text: "Confirming...", sender: 'agent', isProcessing: true }]);
+                      sendToBackend(null, true, pendingAction.transcription);
+                    }}
+                  >
+                    Confirm
+                  </button>
                 </div>
               )}
             </div>

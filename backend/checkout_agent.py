@@ -17,21 +17,28 @@ fraud_tracker = defaultdict(list)
 # Initialize Razorpay Client (gracefully handles missing/invalid keys until an API call is made)
 rzp_client = razorpay.Client(auth=(os.environ.get('RAZORPAY_KEY_ID', ''), os.environ.get('RAZORPAY_KEY_SECRET', '')))
 
+_cached_inventory = None
 def load_inventory():
-    path = os.path.join(os.path.dirname(__file__), "inventory.json")
-    with open(path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    global _cached_inventory
+    if _cached_inventory is None:
+        path = os.path.join(os.path.dirname(__file__), "inventory.json")
+        with open(path, 'r', encoding='utf-8') as f:
+            _cached_inventory = json.load(f)
+    return _cached_inventory
 
 # Mock databases for the remaining intents
-MOCK_CART = {}
-MOCK_ORDERS = {}
-MOCK_SETTLEMENTS = {}
-MOCK_OFFERS = {}
-MOCK_INVOICES = {}
-MOCK_PAYOUTS = {}
-MOCK_SAVED_CARDS = []
-MOCK_REFUNDS = {}
-MOCK_SUBSCRIPTIONS = {}
+import uuid
+MOCK_CART = defaultdict(dict)
+MOCK_ORDERS = defaultdict(dict)
+MOCK_SETTLEMENTS = defaultdict(dict)
+MOCK_OFFERS = defaultdict(dict)
+MOCK_INVOICES = defaultdict(dict)
+MOCK_PAYOUTS = defaultdict(dict)
+MOCK_SAVED_CARDS = defaultdict(list)
+MOCK_REFUNDS = defaultdict(dict)
+MOCK_SUBSCRIPTIONS = defaultdict(dict)
+pending_cross_sells = defaultdict(str)
+pending_confirmations = defaultdict(dict)  # Stores intent at the moment OTP gate fires; replayed on skip_gate=True
 
 def find_item_in_inventory(item: str, inventory: dict):
     """Robust fuzzy matching against both keys and human-readable names."""
@@ -109,38 +116,108 @@ def get_cross_sell(inventory, item):
             return v['name']
     return None
 
-def process_voice_command(query: str, phone_number: str = None):
+def process_voice_command(query: str, phone_number: str = None, skip_gate: bool = False, context: str = None):
     inventory = load_inventory()
+    session_id = phone_number if phone_number else str(uuid.uuid4())
     
-    # 1. AI Extract Intent
-    print(f"\nUser Said: '{query}'")
-    intent = intent_pipeline.extract_intent(query)
+    # Session-scoped state references (use MOCK_* module-level dicts)
+    cart = MOCK_CART[session_id]
+    orders = MOCK_ORDERS[session_id]
+    refunds = MOCK_REFUNDS[session_id]
+    subscriptions = MOCK_SUBSCRIPTIONS[session_id]
+    invoices = MOCK_INVOICES[session_id]
+    payouts = MOCK_PAYOUTS[session_id]
+    saved_cards = MOCK_SAVED_CARDS[session_id]
+    offers = MOCK_OFFERS[session_id]
+    
+    # ----------------------------------------------------------------
+    # STEP 0: If the user is confirming a gated action (skip_gate=True),
+    # SKIP the LLM entirely and replay the stored intent from when the
+    # OTP gate originally fired. This makes confirmations 100% reliable
+    # regardless of language (Hindi, Kannada, etc.).
+    # ----------------------------------------------------------------
+    if skip_gate and pending_confirmations.get(session_id):
+        intent = pending_confirmations.pop(session_id)
+        print(f"\n[CONFIRM] Replaying stored intent: {intent}")
+    else:
+        # 1. AI Extract Intent
+        print(f"\nUser Said: '{query}'")
+        intent = intent_pipeline.extract_intent(query, context=context)
+        
+        # 1.05 Handle Cross-Sell Affirmations — language-agnostic approach:
+        # Instead of maintaining word lists for every language, we check the LLM's
+        # own output. If there's a pending cross-sell and the LLM returned an
+        # "unknown" / null intent (it couldn't understand a short affirmative phrase),
+        # we treat it as cross-sell acceptance. We only check for explicit negatives
+        # (a much smaller, stable set) to avoid false positives.
+        if pending_cross_sells.get(session_id):
+            action_raw = intent.get('action')
+            item_raw = (intent.get('item') or '').strip().lower()
+            lm_confused = action_raw in [None, 'unknown'] or item_raw in ['', 'unknown', 'that', 'it', 'this']
+            # Explicit negatives — Hindi, Kannada, English only
+            explicit_no = ["no", "nah", "nahi", "mat", "nope",
+                           "नहीं", "नही", "मत",   # Hindi/Marathi
+                           "ಬೇಡ"]                 # Kannada
+            said_no = any(w in query for w in explicit_no)
+            if lm_confused and not said_no:
+                intent = {"action": "add", "item": pending_cross_sells[session_id], "quantity": 1}
+            # Always clear the pending cross-sell after this turn
+            del pending_cross_sells[session_id]
+
     
     # 1.1 Force read-only actions to bypass OTP gate
-    if intent.get('action') in ['track', 'track_refund', 'check_settlement', 'search', 'faq', 'remove', 'check_emi', 'handle_failed_payment', 'magic_checkout_address', 'check_offers']:
+    if intent.get('action') in ['track', 'track_refund', 'check_settlement', 'search', 'faq', 'remove', 'check_emi', 'handle_failed_payment', 'magic_checkout_address', 'check_offers', 'add', 'add_to_cart']:
         intent['requires_confirmation'] = False
     
-    # 1.5 Handle Gated Money Actions (Track 1 Bar) - MUST BE AT TOP
-    if intent.get('requires_confirmation'):
+    # 1.2 Force checkout/cart to ALWAYS use the OTP gate so there is only ONE confirmation step.
+    _pre_action = intent.get('action')
+    _pre_item = (intent.get('item') or '').lower()
+    if _pre_action in ['checkout', 'buy', 'pay'] and (not _pre_item or _pre_item == 'cart') and not skip_gate:
+        intent['requires_confirmation'] = True
+    
+    # 1.5 Handle Gated Money Actions (OTP Gate)
+    if intent.get('requires_confirmation') and not skip_gate:
         now = time.time()
-        session_id = phone_number or 'default_session'
-        # Clean up old timestamps > 60 seconds
         fraud_tracker[session_id] = [t for t in fraud_tracker[session_id] if now - t < 60]
         
-        if len(fraud_tracker[session_id]) >= 3:
+        if len(fraud_tracker[session_id]) >= 15:
             msg = "Razorpay Thirdwatch Alert: Too many financial requests in a short time. Please try again later."
             print(f"[FRAUD] {msg}")
             return {"status": "blocked", "reason": "rate_limit_exceeded", "message": msg}
             
         fraud_tracker[session_id].append(now)
         
-        msg = "This action requires money movement. Initiating OTP Gate... Please confirm before we trigger the Razorpay API."
+        # SAVE intent so we can replay it when user confirms (skip_gate=True)
+        pending_confirmations[session_id] = intent.copy()
+        
+        # For checkout/cart, include the cart summary in the confirmation message
+        _gate_action = intent.get('action')
+        _gate_item = (intent.get('item') or '').lower()
+        if _gate_action in ['checkout', 'buy', 'pay'] and (not _gate_item or _gate_item == 'cart'):
+            if not cart:
+                del pending_confirmations[session_id]
+                return {"status": "failed", "reason": "empty_cart", "message": "Your cart is currently empty. Would you like to search for some products?"}
+            _cart_parts = []
+            _total = 0
+            for _ci, _cq in cart.items():
+                if _ci in inventory:
+                    _cart_parts.append(f"{_cq}x {inventory[_ci]['name']}")
+                    _total += inventory[_ci]['price'] * _cq
+            _summary = ", ".join(_cart_parts)
+            msg = f"Your cart has {_summary}. Total: \u20b9{_total}. Confirm to generate your secure Razorpay payment link?"
+        else:
+            msg = "This action requires money movement. Initiating OTP Gate... Please confirm before we trigger the Razorpay API."
+        
         print(f"[AUDIT] {msg}")
         return {"status": "pending_confirmation", "message": msg}
     
     action = intent.get('action')
     item = intent.get('item')
-    requested_qty = intent.get('quantity', 1)
+    requested_qty = max(1, int(intent.get('quantity', 1) or 1))
+    
+    if skip_gate:
+        if action in ['checkout', 'buy', 'pay'] and (not item or item.lower() == 'cart'):
+            action = 'confirm_cart'
     
     # 2. Handle Price Checking (Search)
     if action in ['search', 'price_check', 'find', 'query'] and item:
@@ -174,35 +251,38 @@ def process_voice_command(query: str, phone_number: str = None):
             return {"status": "failed", "reason": "item_not_found", "alternative": alt, "message": msg}
 
     # 2.5 Handle Full Cart Checkout
+    # NOTE: In normal flow this block is unreachable for checkout+cart because step 1.2 above
+    # forces requires_confirmation=True, routing through the OTP gate (which now includes the
+    # cart summary). This block remains as a safety fallback only.
     elif action in ['checkout', 'buy', 'pay'] and (not item or item.lower() == 'cart'):
-        if not MOCK_CART:
+        if not cart:
             msg = "Your cart is currently empty. Would you like to search for some products?"
             print(f"[AGENT] {msg}")
             return {"status": "failed", "reason": "empty_cart", "message": msg}
             
         cart_items = []
         total_amount = 0
-        for cart_item_key, qty in MOCK_CART.items():
+        for cart_item_key, qty in cart.items():
             prod_name = inventory[cart_item_key]['name']
             price = inventory[cart_item_key]['price']
             total_amount += price * qty
             cart_items.append(f"{qty}x {prod_name}")
             
         summary = ", ".join(cart_items)
-        msg = f"Your cart has {summary}. The total is ₹{total_amount}. Would you like me to generate the secure payment link now?"
+        msg = f"Your cart has {summary}. Total: ₹{total_amount}. Confirm to generate your secure Razorpay payment link?"
         print(f"[AGENT] {msg}")
-        return {"status": "pending_cart_confirmation", "message": msg}
+        return {"status": "pending_confirmation", "message": msg}
         
     # 2.6 Handle Cart Confirmation
     elif action == 'confirm_cart':
-        if not MOCK_CART:
+        if not cart:
             msg = "Your cart is empty, so there's nothing to checkout!"
             print(f"[AGENT] {msg}")
             return {"status": "failed", "reason": "empty_cart", "message": msg}
             
         cart_items = []
         total_amount = 0
-        for cart_item_key, qty in MOCK_CART.items():
+        for cart_item_key, qty in cart.items():
             prod_name = inventory[cart_item_key]['name']
             price = inventory[cart_item_key]['price']
             total_amount += price * qty
@@ -226,14 +306,14 @@ def process_voice_command(query: str, phone_number: str = None):
             plink = rzp_client.payment_link.create(payment_link_data)
             link_id = plink.get('id')
             link = plink.get('short_url')
-            MOCK_ORDERS[link_id] = {"status": "created", "total": total_amount}
-            MOCK_CART.clear()
+            orders[link_id] = {"status": "created", "total": total_amount}
+            cart.clear()
             msg = f"Perfect! I've generated your secure payment link for {summary}. You can complete your ₹{total_amount} payment here: {link}"
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "checkout_cart", "payment_link": link, "message": msg}
         except Exception as e:
-            msg = f"Perfect! I've generated your payment link for {summary}. Order ID: MOCK_CART_123 (Mock Fallback)"
-            MOCK_CART.clear()
+            msg = f"Perfect! I've generated your payment link for {summary}. Order ID: cart_123 (Mock Fallback)"
+            cart.clear()
             print(f"[AGENT-MOCK-FALLBACK] {msg}")
             return {"status": "success", "action": "checkout_cart", "message": msg}
 
@@ -258,9 +338,12 @@ def process_voice_command(query: str, phone_number: str = None):
                 
             # --- PARTIAL FULFILLMENT (QUANTITY MISMATCH) ---
             elif stock < requested_qty:
-                msg = f"We only have {stock} {item}(s) in stock, but you asked for {requested_qty}. Would you like me to add all {stock} to your cart instead?"
-                print(f"[AGENT] {msg}")
-                return {"status": "pending_quantity_confirmation", "available": stock, "message": msg}
+                if skip_gate:
+                    requested_qty = stock
+                else:
+                    msg = f"We only have {stock} {item}(s) in stock, but you asked for {requested_qty}. Would you like me to add all {stock} to your cart instead?"
+                    print(f"[AGENT] {msg}")
+                    return {"status": "pending_quantity_confirmation", "available": stock, "message": msg}
                 
             # --- THE HAPPY PATH + UPSELL / PAYMENT LINK ---
             if action in ['checkout', 'buy', 'purchase']:
@@ -280,26 +363,31 @@ def process_voice_command(query: str, phone_number: str = None):
                     plink = rzp_client.payment_link.create(payment_link_data)
                     link_id = plink.get('id')
                     link = plink.get('short_url')
-                    MOCK_ORDERS[link_id] = {"status": "created", "total": total_price / 100}
-                    MOCK_CART.clear()
+                    orders[link_id] = {"status": "created", "total": total_price / 100}
+                    cart.clear()
                     msg = f"I've prepared your order for {requested_qty} {product['name']}. The total is ₹{price * requested_qty}. Please complete your payment here: {link}"
                     print(f"[AGENT] {msg}")
                     return {"status": "success", "action": "checkout_with_link", "payment_link": link, "message": msg}
                 except Exception as e:
                     print(f"[ERROR] Payment Link Gen Error: {e}")
-                    link_id = f"plink_mock_{len(MOCK_ORDERS) + 1000}"
-                    MOCK_ORDERS[link_id] = {"status": "created", "total": price * requested_qty}
-                    MOCK_CART.clear()
+                    link_id = f"plink_mock_{len(orders) + 1000}"
+                    orders[link_id] = {"status": "created", "total": price * requested_qty}
+                    cart.clear()
                     msg = f"I've prepared your order for {requested_qty} {product['name']}. The total is ₹{price * requested_qty}. Order ID: {link_id} (Mock Fallback)"
                     print(f"[AGENT-MOCK-FALLBACK] {msg}")
                     return {"status": "success", "action": "checkout_with_link", "message": msg}
             else:
-                MOCK_CART[item] = MOCK_CART.get(item, 0) + requested_qty
+                cart[item] = cart.get(item, 0) + requested_qty
                 msg = f"I've added {requested_qty} {product['name']} to your cart."
                 print(f"[AUDIT] {msg}")
                 cross_sell_item = get_cross_sell(inventory, item)
                 if cross_sell_item:
                     msg += f" Would you also like to add {cross_sell_item} to your order?"
+                    # Store the KEY (matched from name) in pending_cross_sells
+                    for k, v in inventory.items():
+                        if v['name'] == cross_sell_item:
+                            pending_cross_sells[session_id] = k
+                            break
                 print(f"[AGENT] {msg}")
                 return {"status": "success", "action": "added", "message": msg}
             
@@ -343,11 +431,11 @@ def process_voice_command(query: str, phone_number: str = None):
         
     # 5. Handle Remove from Cart
     elif action in ['remove', 'delete', 'remove_from_cart', 'remove_item'] and item:
-        matches = difflib.get_close_matches(item, MOCK_CART.keys(), n=1, cutoff=0.6)
+        matches = difflib.get_close_matches(item, cart.keys(), n=1, cutoff=0.6)
         if matches:
             removed_item = matches[0]
             product = inventory.get(removed_item, {"name": removed_item.replace("_", " ")})
-            del MOCK_CART[removed_item]
+            del cart[removed_item]
             msg = f"I've removed the {product['name']} from your cart."
             print(f"[AUDIT] {msg}")
             return {"status": "success", "action": "removed", "message": msg}
@@ -368,18 +456,19 @@ def process_voice_command(query: str, phone_number: str = None):
                 return {"status": "success", "action": "track", "order_status": status, "message": msg}
             else:
                 # Query the live Razorpay API for orders matching this receipt/ID
-                orders = rzp_client.order.fetch_all({"receipt": str(order_id)})
+                # Use rzp_orders to avoid shadowing the session-scoped orders dict
+                rzp_orders = rzp_client.order.fetch_all({"receipt": str(order_id)})
                 
-                if orders.get('items') and len(orders['items']) > 0:
-                    real_order = orders['items'][0]
+                if rzp_orders.get('items') and len(rzp_orders['items']) > 0:
+                    real_order = rzp_orders['items'][0]
                     status = real_order['status']
                     msg = f"According to Razorpay, your order {order_id} is currently: {status.upper()}."
                     print(f"[AGENT] {msg}")
                     return {"status": "success", "action": "track", "order_status": status, "message": msg}
                 else:
-                    # Fallback to local DB if it doesn't exist on Razorpay yet (for demo purposes)
-                    if order_id in MOCK_ORDERS:
-                        status = MOCK_ORDERS[order_id]['status']
+                    # Fallback to local session DB if order not found on Razorpay
+                    if order_id in orders:
+                        status = orders[order_id]['status']
                         msg = f"Order {order_id} is currently: {status.upper()} (Local Database)."
                         print(f"[AGENT-MOCK-FALLBACK] {msg}")
                         return {"status": "success", "action": "track", "order_status": status, "message": msg}
@@ -395,13 +484,13 @@ def process_voice_command(query: str, phone_number: str = None):
     # 7. Handle E-Commerce Order Cancelation (Non-subscription)
     elif action in ['cancel', 'cancel_order']:
         order_id = intent.get('order_id')
-        if order_id in MOCK_ORDERS:
-            if MOCK_ORDERS[order_id].get('status') == 'shipped':
+        if order_id in orders:
+            if orders[order_id].get('status') == 'shipped':
                 msg = f"Sorry, order {order_id} has already shipped and cannot be canceled."
                 print(f"[AGENT] {msg}")
                 return {"status": "failed", "reason": "already_shipped", "message": msg}
             else:
-                MOCK_ORDERS[order_id]['status'] = 'canceled'
+                orders[order_id]['status'] = 'canceled'
                 msg = f"Order {order_id} has been successfully canceled and refunded."
                 print(f"[AGENT] {msg}")
                 return {"status": "success", "action": "canceled", "message": msg}
@@ -433,17 +522,17 @@ def process_voice_command(query: str, phone_number: str = None):
                     return {"status": "failed", "reason": "payment_not_found", "message": msg}
             
             rzp_client.payment.refund(payment_id, {"speed": "optimum"})
-            MOCK_ORDERS[order_id] = MOCK_ORDERS.get(order_id, {})
-            MOCK_ORDERS[order_id]['status'] = 'refunded'
-            MOCK_REFUNDS[order_id] = {'status': 'processed'}
+            orders[order_id] = orders.get(order_id, {})
+            orders[order_id]['status'] = 'refunded'
+            refunds[order_id] = {'status': 'processed'}
             msg = f"Successfully initiated live Razorpay refund for {order_id}."
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "refund", "message": msg}
         except Exception as e:
             msg = f"Failed to initiate live refund. Razorpay Error: {str(e)}"
-            MOCK_ORDERS[order_id] = MOCK_ORDERS.get(order_id, {})
-            MOCK_ORDERS[order_id]['status'] = 'refunded'
-            MOCK_REFUNDS[order_id] = {'status': 'processed'}
+            orders[order_id] = orders.get(order_id, {})
+            orders[order_id]['status'] = 'refunded'
+            refunds[order_id] = {'status': 'processed'}
             print(f"[AGENT-MOCK-FALLBACK] Initiating mock refund for {order_id} due to API Error: {str(e)}")
             return {"status": "success", "action": "refund", "message": f"Successfully initiated refund for {order_id} (Mock Fallback)."}
 
@@ -486,7 +575,7 @@ def process_voice_command(query: str, phone_number: str = None):
                 }
             })
             link_id = plink.get('id')
-            MOCK_ORDERS[link_id] = {"status": "created", "total": amount}
+            orders[link_id] = {"status": "created", "total": amount}
             msg = f"Generated a LIVE Razorpay Payment Link for ₹{amount}: {plink['short_url']}"
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "create_payment_link", "payment_link": plink['short_url'], "message": msg}
@@ -497,14 +586,14 @@ def process_voice_command(query: str, phone_number: str = None):
 
     # 7.5 Handle Subscription Cancellation (Customer side)
     elif action in ['cancel_subscription', 'stop_subscription']:
-        sub_id = intent.get('subscription_id')
-        if sub_id in MOCK_SUBSCRIPTIONS:
-            if MOCK_SUBSCRIPTIONS[sub_id]['status'] == 'canceled':
+        sub_id = intent.get('sub_id')
+        if sub_id in subscriptions:
+            if subscriptions[sub_id]['status'] == 'canceled':
                 msg = f"Subscription {sub_id} is already canceled."
                 print(f"[AGENT] {msg}")
                 return {"status": "failed", "reason": "already_canceled", "message": msg}
             else:
-                MOCK_SUBSCRIPTIONS[sub_id]['status'] = 'canceled'
+                subscriptions[sub_id]['status'] = 'canceled'
                 msg = f"Your subscription {sub_id} has been successfully canceled. No further charges will be made."
                 print(f"[AGENT] {msg}")
                 return {"status": "success", "action": "cancel_subscription", "message": msg}
@@ -537,7 +626,7 @@ def process_voice_command(query: str, phone_number: str = None):
     elif action in ['create_offer', 'create_discount', 'offer', 'discount']:
         discount = intent.get('discount_percent', 10)
         offer_id = f"offer_diwali_{discount}"
-        MOCK_OFFERS[offer_id] = {"discount": discount, "status": "active"}
+        offers[offer_id] = {"discount": discount, "status": "active"}
         msg = f"Successfully created a {discount}% Razorpay Offer: {offer_id}"
         print(f"[AGENT] {msg}")
         return {"status": "success", "action": "create_offer", "offer_id": offer_id, "message": msg}
@@ -564,13 +653,13 @@ def process_voice_command(query: str, phone_number: str = None):
             }
             invoice = rzp_client.invoice.create(invoice_data)
             inv_id = invoice['id']
-            MOCK_INVOICES[inv_id] = {"amount": amount, "company": company, "status": "issued"}
+            invoices[inv_id] = {"amount": amount, "company": company, "status": "issued"}
             msg = f"Generated GST Invoice {inv_id} for {company} for ₹{amount}. Link: {invoice.get('short_url')}"
             print(f"[AGENT] {msg}")
             return {"status": "success", "action": "create_invoice", "invoice_id": inv_id, "message": msg}
         except Exception as e:
-            inv_id = f"inv_{len(MOCK_INVOICES) + 1000}"
-            MOCK_INVOICES[inv_id] = {"amount": amount, "company": company, "status": "issued"}
+            inv_id = f"inv_{len(invoices) + 1000}"
+            invoices[inv_id] = {"amount": amount, "company": company, "status": "issued"}
             msg = f"Generated GST Invoice {inv_id} for {company} for ₹{amount} (Mock Fallback due to API error: {str(e)})."
             print(f"[AGENT-MOCK-FALLBACK] {msg}")
             return {"status": "success", "action": "create_invoice", "invoice_id": inv_id, "message": msg}
@@ -587,8 +676,8 @@ def process_voice_command(query: str, phone_number: str = None):
     elif action in ['payout', 'send_payout', 'transfer']:
         amount = intent.get('amount')
         recipient = intent.get('recipient')
-        payout_id = f"pout_{len(MOCK_PAYOUTS) + 1000}"
-        MOCK_PAYOUTS[payout_id] = {"amount": amount, "recipient": recipient, "status": "processed"}
+        payout_id = f"pout_{len(payouts) + 1000}"
+        payouts[payout_id] = {"amount": amount, "recipient": recipient, "status": "processed"}
         msg = f"Successfully processed RazorpayX payout of ₹{amount} to {recipient}. Payout ID: {payout_id}."
         print(f"[AGENT] {msg}")
         return {"status": "success", "action": "payout", "payout_id": payout_id, "message": msg}
@@ -612,7 +701,7 @@ def process_voice_command(query: str, phone_number: str = None):
     # 15. Handle Card Tokenization (Customer side)
     elif action == 'save_card':
         network = intent.get('card_network', 'credit')
-        MOCK_SAVED_CARDS.append(network)
+        saved_cards.append(network)
         msg = f"Your {network} card has been securely tokenized and saved via Razorpay TokenHQ for future purchases."
         print(f"[AGENT] {msg}")
         return {"status": "success", "action": "save_card", "message": msg}
@@ -632,9 +721,10 @@ def process_voice_command(query: str, phone_number: str = None):
                     print(f"[WARNING] {msg}")
                     return {"status": "failed", "reason": "payment_not_found", "message": msg}
             
-            refunds = rzp_client.refund.all({"payment_id": payment_id})
-            if refunds.get('items') and len(refunds['items']) > 0:
-                latest_refund = refunds['items'][0]
+            # Use rzp_refunds to avoid shadowing the session-scoped refunds dict
+            rzp_refunds = rzp_client.refund.all({"payment_id": payment_id})
+            if rzp_refunds.get('items') and len(rzp_refunds['items']) > 0:
+                latest_refund = rzp_refunds['items'][0]
                 status = latest_refund['status']
                 arn = latest_refund.get('acquirer_data', {}).get('arn', 'Pending')
                 msg = f"Your refund for {order_id} is currently {status}. Bank ARN: {arn}."
@@ -645,8 +735,9 @@ def process_voice_command(query: str, phone_number: str = None):
                 print(f"[WARNING] {msg}")
                 return {"status": "failed", "reason": "refund_not_found", "message": msg}
         except Exception as e:
-            if order_id in MOCK_REFUNDS:
-                status = MOCK_REFUNDS[order_id]['status']
+            # Fall back to session-scoped refunds dict (correctly references local session var)
+            if order_id in refunds:
+                status = refunds[order_id]['status']
                 msg = f"Your refund for {order_id} has been {status} by the bank. Bank ARN: 8493820498 (Mock Fallback due to API error)."
                 print(f"[AGENT-MOCK-FALLBACK] {msg}")
                 return {"status": "success", "action": "track_refund", "message": msg}
