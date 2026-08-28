@@ -130,7 +130,7 @@ class SarvamIntentPipeline:
             import json
             if os.path.exists(self.model_path):
                 print(f"Loading Sarvam-1 GGUF from {self.model_path}...")
-                self.llm = Llama(model_path=self.model_path, n_ctx=2048, verbose=False)
+                self.llm = Llama(model_path=self.model_path, n_ctx=4096, verbose=False)
                 
                 schema = {
                     "type": "object",
@@ -235,12 +235,6 @@ Result: {{ "action": "refund", "order_id": "12345", "requires_confirmation": tru
 User: "refund 500 rupees from order 123"
 Result: {{ "action": "partial_refund", "order_id": "123", "amount": 500.0, "requires_confirmation": true }}
 
-User: "my payment failed"
-Result: {{ "action": "handle_failed_payment", "requires_confirmation": false }}
-
-User: "get my magic checkout address"
-Result: {{ "action": "magic_checkout_address", "requires_confirmation": false }}
-
 User: "what are the current offers"
 Result: {{ "action": "check_offers", "requires_confirmation": false }}
 
@@ -288,6 +282,10 @@ Result: {{ "action": "track_refund", "order_id": "pay_1234567890" }}
 
 User: "वोट एयरडोप्स ऐड करना है"
 Result: {{ "action": "add", "item": "boat airdopes", "requires_confirmation": false }}
+
+Context: "agent: Would you like to add JBL Go 2 Bluetooth Speaker to your order?"
+User: "हा कर दो"
+Result: {{ "action": "add", "item": "jbl go 2 bluetooth speaker", "requires_confirmation": false }}
 
 Conversation Context (Recent messages):
 {context if context else 'None'}

@@ -39,28 +39,43 @@ MOCK_REFUNDS = defaultdict(dict)
 MOCK_SUBSCRIPTIONS = defaultdict(dict)
 pending_cross_sells = defaultdict(str)
 pending_confirmations = defaultdict(dict)  # Stores intent at the moment OTP gate fires; replayed on skip_gate=True
+pending_alternatives = defaultdict(str)    # Stores alt key when OOS/not-found alternative is offered
 
 def find_item_in_inventory(item: str, inventory: dict):
-    """Robust fuzzy matching against both keys and human-readable names."""
+    """Fuzzy match against human-readable names with a word-overlap guard.
+    Prevents brand-prefix collisions like 'boat airdopes' → 'boat cable'.
+    """
     if not item:
         return None
     item_lower = item.lower()
-    
+
+    # Exact key match
     if item_lower in inventory:
         return item_lower
-        
-    # Match against keys
-    matches = difflib.get_close_matches(item_lower, inventory.keys(), n=1, cutoff=0.5)
-    if matches:
-        return matches[0]
-        
-    # Match against human-readable names
+
+    # Build name → key map for matching
     name_to_key = {v['name'].lower(): k for k, v in inventory.items()}
-    matches = difflib.get_close_matches(item_lower, name_to_key.keys(), n=1, cutoff=0.5)
-    if matches:
-        return name_to_key[matches[0]]
-        
+
+    def has_word_overlap(query: str, candidate: str, min_len: int = 4) -> bool:
+        """Returns True if query and candidate share at least one significant word."""
+        q_words = {w for w in query.split() if len(w) >= min_len}
+        c_words = {w for w in candidate.split() if len(w) >= min_len}
+        return bool(q_words & c_words)
+
+    # Match against names first (e.g. "boat airdopes 141" vs "boAt Airdopes 141")
+    matches = difflib.get_close_matches(item_lower, name_to_key.keys(), n=3, cutoff=0.5)
+    for m in matches:
+        if has_word_overlap(item_lower, m):
+            return name_to_key[m]
+
+    # Fallback: match against underscore keys with stricter cutoff
+    matches = difflib.get_close_matches(item_lower, inventory.keys(), n=3, cutoff=0.6)
+    for m in matches:
+        if has_word_overlap(item_lower, m.replace('_', ' ')):
+            return m
+
     return None
+
 
 def suggest_alternative(inventory, out_of_stock_item):
     """Finds an alternative item in the same category."""
@@ -94,12 +109,13 @@ def suggest_any_alternative(inventory, search_term):
             return item_name
     return None
 
-def get_cross_sell(inventory, item):
-    """Suggests a complimentary item based on category."""
+def get_cross_sell(inventory, item, cart=None):
+    """Suggests a complimentary item based on category, skipping items already in cart."""
     item_data = inventory.get(item)
     if not item_data: return None
     
     cat = item_data.get('category')
+    cart = cart or {}
     
     cross_map = {
         'watch': 'headphones',
@@ -112,7 +128,7 @@ def get_cross_sell(inventory, item):
     target_cat = cross_map.get(cat, cat)
     
     for k, v in inventory.items():
-        if k != item and v.get('category') == target_cat and v.get('stock', 0) > 0:
+        if k != item and k not in cart and v.get('category') == target_cat and v.get('stock', 0) > 0:
             return v['name']
     return None
 
@@ -130,41 +146,42 @@ def process_voice_command(query: str, phone_number: str = None, skip_gate: bool 
     saved_cards = MOCK_SAVED_CARDS[session_id]
     offers = MOCK_OFFERS[session_id]
     
-    # ----------------------------------------------------------------
-    # STEP 0: If the user is confirming a gated action (skip_gate=True),
-    # SKIP the LLM entirely and replay the stored intent from when the
-    # OTP gate originally fired. This makes confirmations 100% reliable
-    # regardless of language (Hindi, Kannada, etc.).
-    # ----------------------------------------------------------------
+    # Confirmation replay — skip LLM, use stored intent
     if skip_gate and pending_confirmations.get(session_id):
         intent = pending_confirmations.pop(session_id)
         print(f"\n[CONFIRM] Replaying stored intent: {intent}")
     else:
-        # 1. AI Extract Intent
+        # Inject cross-sell item into context so LLM can resolve "yes/हा/ಹೌದು" naturally
+        llm_context = context or ""
+        if pending_cross_sells.get(session_id):
+            cross_sell_name = inventory.get(pending_cross_sells[session_id], {}).get('name', '')
+            llm_context = f"agent: Would you like to add {cross_sell_name} to your order?\n" + llm_context
+        elif pending_alternatives.get(session_id):
+            alt_name = inventory.get(pending_alternatives[session_id], {}).get('name', '')
+            llm_context = f"agent: We have {alt_name} in stock instead. Should I add that?\n" + llm_context
+
         print(f"\nUser Said: '{query}'")
-        intent = intent_pipeline.extract_intent(query, context=context)
+        intent = intent_pipeline.extract_intent(query, context=llm_context)
+
+        # Fallback for cross-sells and alternatives
+        explicit_no = ["no", "nah", "nahi", "mat", "nope", "नहीं", "नही", "मत", "ಬೇಡ"]
         
-        # 1.05 Handle Cross-Sell Affirmations — language-agnostic approach:
-        # Instead of maintaining word lists for every language, we check the LLM's
-        # own output. If there's a pending cross-sell and the LLM returned an
-        # "unknown" / null intent (it couldn't understand a short affirmative phrase),
-        # we treat it as cross-sell acceptance. We only check for explicit negatives
-        # (a much smaller, stable set) to avoid false positives.
         if pending_cross_sells.get(session_id):
             action_raw = intent.get('action')
             item_raw = (intent.get('item') or '').strip().lower()
             lm_confused = action_raw in [None, 'unknown'] or item_raw in ['', 'unknown', 'that', 'it', 'this']
-            # Explicit negatives — Hindi, Kannada, English only
-            explicit_no = ["no", "nah", "nahi", "mat", "nope",
-                           "नहीं", "नही", "मत",   # Hindi/Marathi
-                           "ಬೇಡ"]                 # Kannada
-            said_no = any(w in query for w in explicit_no)
-            if lm_confused and not said_no:
+            if lm_confused and not any(w in query for w in explicit_no):
                 intent = {"action": "add", "item": pending_cross_sells[session_id], "quantity": 1}
-            # Always clear the pending cross-sell after this turn
             del pending_cross_sells[session_id]
+            
+        elif pending_alternatives.get(session_id):
+            action_raw = intent.get('action')
+            item_raw = (intent.get('item') or '').strip().lower()
+            lm_confused = action_raw in [None, 'unknown'] or item_raw in ['', 'unknown', 'that', 'it', 'this']
+            if lm_confused and not any(w in query for w in explicit_no):
+                intent = {"action": "add", "item": pending_alternatives[session_id], "quantity": 1}
+            del pending_alternatives[session_id]
 
-    
     # 1.1 Force read-only actions to bypass OTP gate
     if intent.get('action') in ['track', 'track_refund', 'check_settlement', 'search', 'faq', 'remove', 'check_emi', 'handle_failed_payment', 'magic_checkout_address', 'check_offers', 'add', 'add_to_cart']:
         intent['requires_confirmation'] = False
@@ -333,6 +350,7 @@ def process_voice_command(query: str, phone_number: str = None, skip_gate: bool 
                 if alt:
                     alt_name = inventory[alt]['name']
                     msg += f" However, we do have the {alt_name} in stock! Should I add that instead?"
+                    pending_alternatives[session_id] = alt
                 print(f"[AGENT] {msg}")
                 return {"status": "failed", "reason": "out_of_stock", "alternative": alt, "message": msg}
                 
@@ -380,14 +398,15 @@ def process_voice_command(query: str, phone_number: str = None, skip_gate: bool 
                 cart[item] = cart.get(item, 0) + requested_qty
                 msg = f"I've added {requested_qty} {product['name']} to your cart."
                 print(f"[AUDIT] {msg}")
-                cross_sell_item = get_cross_sell(inventory, item)
+                cross_sell_item = get_cross_sell(inventory, item, cart)
                 if cross_sell_item:
                     msg += f" Would you also like to add {cross_sell_item} to your order?"
-                    # Store the KEY (matched from name) in pending_cross_sells
                     for k, v in inventory.items():
                         if v['name'] == cross_sell_item:
                             pending_cross_sells[session_id] = k
                             break
+                else:
+                    msg += " Would you like anything else?"
                 print(f"[AGENT] {msg}")
                 return {"status": "success", "action": "added", "message": msg}
             
@@ -396,6 +415,7 @@ def process_voice_command(query: str, phone_number: str = None, skip_gate: bool 
             if alt:
                 alt_name = inventory[alt]['name']
                 msg = f"I couldn't find '{item}'. But we do have the {alt_name} in stock! Would you like me to add that instead?"
+                pending_alternatives[session_id] = alt
             else:
                 msg = f"I couldn't find '{item}' in our catalog."
             print(f"[WARNING] {msg}")
