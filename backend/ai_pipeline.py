@@ -203,8 +203,8 @@ User: "what is the status of order 123"
 Result: {{ "action": "track", "order_id": "123", "requires_confirmation": false }}
 User: "did my money settle yet?"
 Result: {{ "action": "check_settlement", "requires_confirmation": false }}
-User: "remove the black jacket from my cart"
-Result: {{ "action": "remove", "item": "black jacket", "requires_confirmation": false }}
+User: "remove the JBL speaker from my cart"
+Result: {{ "action": "remove", "item": "jbl speaker", "requires_confirmation": false }}
 
 User: "add a black jacket to my cart"
 Result: {{ "action": "add", "item": "black jacket" }}
@@ -214,8 +214,8 @@ Result: {{ "action": "checkout", "item": "black jacket", "requires_confirmation"
 User: "create a 15 percent discount for Diwali"
 Result: {{ "action": "create_offer", "discount_percent": 15, "requires_confirmation": true }}
 
-User: "can I pay for these shoes in EMIs?"
-Result: {{ "action": "check_emi", "item": "shoes" }}
+User: "can I pay for this laptop in EMIs?"
+Result: {{ "action": "check_emi", "item": "laptop" }}
 
 User: "send an invoice of 5000 to Acme Corp"
 Result: {{ "action": "create_invoice", "amount": 5000.0, "company": "Acme Corp", "requires_confirmation": true }}

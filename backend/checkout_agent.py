@@ -175,10 +175,9 @@ def process_voice_command(query: str, phone_number: str = None, skip_gate: bool 
             del pending_cross_sells[session_id]
             
         elif pending_alternatives.get(session_id):
-            action_raw = intent.get('action')
-            item_raw = (intent.get('item') or '').strip().lower()
-            lm_confused = action_raw in [None, 'unknown'] or item_raw in ['', 'unknown', 'that', 'it', 'this']
-            if lm_confused and not any(w in query for w in explicit_no):
+            # Always override — LLM may return the original OOS item instead of 'unknown',
+            # so checking lm_confused alone is not enough. Any non-no reply adds the alternative.
+            if not any(w in query for w in explicit_no):
                 intent = {"action": "add", "item": pending_alternatives[session_id], "quantity": 1}
             del pending_alternatives[session_id]
 
@@ -451,7 +450,35 @@ def process_voice_command(query: str, phone_number: str = None, skip_gate: bool 
         
     # 5. Handle Remove from Cart
     elif action in ['remove', 'delete', 'remove_from_cart', 'remove_item'] and item:
-        matches = difflib.get_close_matches(item, cart.keys(), n=1, cutoff=0.6)
+        print(f"[REMOVE] LLM extracted item: '{item}' | query: '{query}'")
+
+        # Tier 1: match LLM-extracted item against cart keys
+        matches = difflib.get_close_matches(item, cart.keys(), n=1, cutoff=0.5)
+
+        # Tier 2: match LLM-extracted item against full product names in cart
+        if not matches:
+            cart_names = {inventory[k]['name'].lower(): k for k in cart if k in inventory}
+            name_matches = difflib.get_close_matches(item.lower(), cart_names.keys(), n=1, cutoff=0.4)
+            if name_matches:
+                matches = [cart_names[name_matches[0]]]
+
+        # Tier 3: match raw user query (English queries, catches LLM anchoring)
+        if not matches:
+            cart_names = {inventory[k]['name'].lower(): k for k in cart if k in inventory}
+            name_matches = difflib.get_close_matches(query.lower(), cart_names.keys(), n=1, cutoff=0.35)
+            if name_matches:
+                matches = [cart_names[name_matches[0]]]
+
+        # Tier 4: word-level substring match — handles Hindi/Kannada queries
+        # where difflib scores near 0 against English names
+        if not matches:
+            cart_names = {inventory[k]['name'].lower(): k for k in cart if k in inventory}
+            item_words = [w for w in item.lower().split() if len(w) >= 3]
+            for name, key in cart_names.items():
+                if any(w in name for w in item_words):
+                    matches = [key]
+                    break
+
         if matches:
             removed_item = matches[0]
             product = inventory.get(removed_item, {"name": removed_item.replace("_", " ")})
@@ -460,7 +487,8 @@ def process_voice_command(query: str, phone_number: str = None, skip_gate: bool 
             print(f"[AUDIT] {msg}")
             return {"status": "success", "action": "removed", "message": msg}
         else:
-            msg = f"You don't have '{item}' in your cart to remove."
+            cart_list = ", ".join(inventory[k]['name'] for k in cart if k in inventory) or "nothing"
+            msg = f"I couldn't find that in your cart. Your cart currently has: {cart_list}."
             print(f"[WARNING] {msg}")
             return {"status": "failed", "reason": "not_in_cart", "message": msg}
             
@@ -684,11 +712,23 @@ def process_voice_command(query: str, phone_number: str = None, skip_gate: bool 
             print(f"[AGENT-MOCK-FALLBACK] {msg}")
             return {"status": "success", "action": "create_invoice", "invoice_id": inv_id, "message": msg}
 
-    # 11. Handle Affordability/EMI (Customer side)
     elif action in ['check_emi', 'emi', 'affordability']:
-        item_to_check = item if item else "your cart"
-        # Dummy mock calculation
-        msg = f"Great news! You can pay for {item_to_check} via Razorpay No-Cost EMI starting at just ₹500/month."
+        resolved_key = None
+        resolved_name = None
+        if item:
+            resolved_key = find_item_in_inventory(item, inventory)
+            if resolved_key:
+                resolved_name = inventory[resolved_key]['name']
+        if not resolved_key and cart:
+            resolved_key = list(cart.keys())[-1]
+            resolved_name = inventory.get(resolved_key, {}).get('name', resolved_key.replace('_', ' '))
+        item_label = resolved_name or "your cart"
+        EMI_MIN = 3000
+        product_price = inventory.get(resolved_key, {}).get('price', 0) if resolved_key else 0
+        if product_price and product_price < EMI_MIN:
+            msg = f"Sorry, EMI is not available for {item_label} (₹{product_price}). Razorpay No-Cost EMI requires a minimum order of ₹{EMI_MIN}. Try it on our laptops, phones, or other high-value items!"
+        else:
+            msg = f"Great news! You can pay for {item_label} via Razorpay No-Cost EMI starting at just ₹500/month."
         print(f"[AGENT] {msg}")
         return {"status": "success", "action": "check_emi", "message": msg}
 
