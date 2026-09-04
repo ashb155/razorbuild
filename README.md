@@ -333,7 +333,7 @@ pytest tests/test_agent_suite.py -v
 
 ## 9. Demo Video Walkthrough Highlights
 
-The submission video demonstrates the end-to-end integration:
+The submission video demonstrates few features of the end-to-end integration:
 1. **Multilingual Voice Recognition:** Real-time spoken interactions in both Kannada ("ನನಗೆ ಚೆಕ್‌ಔಟ್ ಮಾಡಬೇಕು") and Hindi ("मुझे रिफ़ंड करना है"), with on-the-fly speech-to-text decoding.
 2. **Context-Aware Conversational Commerce:** Voice catalog lookup, alternative suggestions when stock is depleted, and natural affirmative coreference handling ("ಹೌದು, ಸೇರಿಸಿ").
 3. **Thirdwatch & Financial OTP Safeguards:** Demonstrates the confirmation gate intercepting financial transactions before calling Razorpay APIs.
