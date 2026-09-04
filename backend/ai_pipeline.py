@@ -283,9 +283,20 @@ Result: {{ "action": "track_refund", "order_id": "pay_1234567890" }}
 User: "वोट एयरडोप्स ऐड करना है"
 Result: {{ "action": "add", "item": "boat airdopes", "requires_confirmation": false }}
 
-Context: "agent: Would you like to add JBL Go 2 Bluetooth Speaker to your order?"
+User: "नॉइस कलर फिट प्रो फोर निकाल दो कार्ट से"
+Result: {{ "action": "remove", "item": "noise color fit pro 4", "requires_confirmation": false }}
+
+User: "काली जैकेट हटा दें"
+Result: {{ "action": "remove", "item": "black jacket", "requires_confirmation": false }}
+
 User: "हा कर दो"
-Result: {{ "action": "add", "item": "jbl go 2 bluetooth speaker", "requires_confirmation": false }}
+Result: {{ "action": "add", "item": "that", "requires_confirmation": false }}
+
+User: "हाँ वो अड कर दो"
+Result: {{ "action": "add", "item": "that", "requires_confirmation": false }}
+
+User: "हाँ अड कर दो"
+Result: {{ "action": "add", "item": "that", "requires_confirmation": false }}
 
 Conversation Context (Recent messages):
 {context if context else 'None'}
